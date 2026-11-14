@@ -206,6 +206,13 @@ extra-duration padding is still documented but not applied.
   still satisfies `min(available, requested)`. Enabling exact clips re-encodes
   the saved file once with the session's own encoder and rate control, so the
   clip matches the requested length to within one frame.
+- **Process ownership.** Every FFmpeg helper is assigned to a job object with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so ending Stillclip in any way, task
+  manager included, also ends the recorder instead of leaving it writing
+  segments. Segments from such an interrupted session are recovered on the next
+  start when full-session mode was active, otherwise they are removed.
+- **Settings robustness.** JSON files are read past an optional UTF-8 byte order
+  mark, so a settings file saved by an editor no longer resets every value.
 - **Audio robustness.** The capture thread tracks the default endpoint while
   recording: a device switch or an unplugged headset is followed within about
   fifteen seconds, with silence padded in between so the audio clock keeps

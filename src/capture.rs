@@ -25,6 +25,54 @@ pub fn command(executable: &Path) -> Command {
     command
 }
 
+/// A job object that kills its members when Stillclip exits, however it exits.
+/// Without it a force-killed app would leave FFmpeg recording forever.
+#[cfg(windows)]
+fn child_job() -> windows_sys::Win32::Foundation::HANDLE {
+    use std::sync::OnceLock;
+    use windows_sys::Win32::System::JobObjects::{
+        CreateJobObjectW, SetInformationJobObject, JobObjectExtendedLimitInformation,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    struct Job(isize);
+    // The handle lives for the whole process; closing it would kill the children.
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+    static JOB: OnceLock<Job> = OnceLock::new();
+    JOB.get_or_init(|| unsafe {
+        let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if !handle.is_null() {
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                std::ptr::addr_of!(limits).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+        }
+        Job(handle as isize)
+    })
+    .0 as windows_sys::Win32::Foundation::HANDLE
+}
+
+/// Ties a spawned helper process to this one. Ignored when the job is unavailable.
+pub fn adopt_child(child: &std::process::Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+        let job = child_job();
+        if !job.is_null() {
+            unsafe {
+                AssignProcessToJobObject(job, child.as_raw_handle() as _);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = child;
+}
+
 /// A monitor attached to the desktop.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Display {
@@ -221,8 +269,7 @@ fn ffmpeg_identity(ffmpeg: &Path) -> (u64, u64) {
 
 pub fn cached_capabilities(ffmpeg: &Path, config_dir: &Path) -> Option<Capabilities> {
     let cache: CapabilityCache =
-        serde_json::from_slice(&fs::read(config_dir.join("ffmpeg-capabilities.json")).ok()?)
-            .ok()?;
+        crate::settings::read_json(&config_dir.join("ffmpeg-capabilities.json"))?;
     let (size, modified) = ffmpeg_identity(ffmpeg);
     (cache.ffmpeg == ffmpeg && cache.size == size && cache.modified == modified && cache.capabilities.probed)
         .then_some(cache.capabilities)
