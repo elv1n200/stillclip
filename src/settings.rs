@@ -423,11 +423,16 @@ pub fn default_config_dir() -> PathBuf {
     application_dir().join("settings")
 }
 
+/// Editors such as Notepad write a UTF-8 byte order mark; serde rejects it,
+/// which would silently reset every setting.
+pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    let bytes = fs::read(path).ok()?;
+    let text = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+    serde_json::from_slice(text).ok()
+}
+
 pub fn load_settings(config_dir: &Path) -> Settings {
-    let settings: Settings = fs::read(config_dir.join("settings.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
+    let settings: Settings = read_json(&config_dir.join("settings.json")).unwrap_or_default();
     settings.sanitized()
 }
 
@@ -528,6 +533,17 @@ mod tests {
         let loaded = load_settings(&directory.0);
         assert_eq!(loaded.replay_seconds, 15);
         assert_eq!(loaded.fps, 60);
+    }
+
+    #[test]
+    fn settings_with_a_byte_order_mark_still_load() {
+        let directory = TestDir::new();
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(br#"{"fps":30,"replay_seconds":45}"#);
+        fs::write(directory.0.join("settings.json"), bytes).unwrap();
+        let loaded = load_settings(&directory.0);
+        assert_eq!(loaded.fps, 30);
+        assert_eq!(loaded.replay_seconds, 45);
     }
 
     #[test]

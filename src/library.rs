@@ -210,10 +210,7 @@ pub fn modified_seconds(clip: &Clip) -> u64 {
 
 impl Index {
     pub fn load(config_dir: &Path) -> Index {
-        fs::read(config_dir.join("library-index.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+        crate::settings::read_json(&config_dir.join("library-index.json")).unwrap_or_default()
     }
 
     pub fn save(&self, config_dir: &Path) {

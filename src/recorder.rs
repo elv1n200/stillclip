@@ -410,6 +410,8 @@ impl Recorder {
                     continue;
                 }
             };
+            // If Stillclip is killed, Windows ends this recorder with it.
+            capture::adopt_child(&child);
             // Give FFmpeg a moment: device or encoder failures surface immediately.
             let deadline = Instant::now() + Duration::from_millis(2000);
             let mut died = None;
