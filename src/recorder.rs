@@ -1,0 +1,1541 @@
+//! Continuous recording into a bounded ring of MPEG-TS segments, replay export,
+//! full-session export and clip trimming. FFmpeg stays a separate executable.
+//!
+//! While recording, FFmpeg writes `seg-000000.ts`, `seg-000001.ts`, … with
+//! continuous timestamps plus a CSV list of finished segments. Saving a replay
+//! byte-concatenates the newest segments (`concat:` protocol) and cuts at the
+//! keyframe closest to the requested length, so nothing is re-encoded and the
+//! recording never pauses.
+use crate::audio::{AudioPipe, AudioSource};
+use crate::capture::{self, AudioInput, Capabilities, CaptureRequest, Display, Encoder, SEGMENT_SECONDS};
+use crate::settings::Quality;
+use serde::{Deserialize, Serialize};
+use std::{
+    env,
+    fs::{self, File},
+    io::Write,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+pub const BUFFER_DIR_NAME: &str = ".stillclip-puffer";
+/// `Config.get_ClipCooldownSeconds` falls back to one second between clips.
+pub const CLIP_COOLDOWN: Duration = Duration::from_secs(1);
+
+fn command(executable: &Path) -> Command {
+    capture::command(executable)
+}
+
+fn ffmpeg_name() -> &'static str {
+    if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    }
+}
+
+/// Checks an explicit override, bundled tools, PATH, and existing Windows installs.
+pub fn find_ffmpeg() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = env::var_os("STILLCLIP_FFMPEG") {
+        candidates.push(PathBuf::from(path));
+    }
+    if let Ok(executable) = env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            candidates.push(directory.join("tools").join(ffmpeg_name()));
+            candidates.push(directory.join(ffmpeg_name()));
+        }
+    }
+    if let Ok(directory) = env::current_dir() {
+        candidates.push(directory.join("tools").join(ffmpeg_name()));
+        candidates.push(directory.join("app").join("tools").join(ffmpeg_name()));
+    }
+    if let Some(path) = env::var_os("PATH") {
+        candidates.extend(env::split_paths(&path).map(|dir| dir.join(ffmpeg_name())));
+    }
+    #[cfg(windows)]
+    {
+        for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(directory) = env::var_os(variable) {
+                candidates.push(PathBuf::from(directory).join(
+                    "Streamlabs OBS/resources/app.asar.unpacked/node_modules/obs-studio-node/ffmpeg.exe",
+                ));
+            }
+        }
+        if let Some(directory) = env::var_os("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(directory).join("Microsoft/WinGet/Links/ffmpeg.exe"));
+        }
+        candidates.push(PathBuf::from("C:/ffmpeg/bin/ffmpeg.exe"));
+    }
+    candidates.into_iter().find(|path| {
+        path.is_file()
+            && command(path)
+                .args(["-hide_banner", "-version"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+    })
+}
+
+pub fn ffprobe_for(ffmpeg: &Path) -> Option<PathBuf> {
+    let probe = ffmpeg.with_file_name(if cfg!(windows) {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    });
+    probe.is_file().then_some(probe)
+}
+
+/// Everything a recording session needs to know up front.
+#[derive(Clone, Debug)]
+pub struct SessionConfig {
+    pub display: Display,
+    pub encoder: Encoder,
+    pub capabilities: Capabilities,
+    pub fps: u32,
+    pub quality: Quality,
+    pub show_cursor: bool,
+    pub system_audio: bool,
+    /// `Some(device id)` enables the microphone; an empty id is the default device.
+    pub microphone: Option<String>,
+    pub microphone_separate_track: bool,
+    pub replay_seconds: u32,
+    pub keep_full_session: bool,
+    /// Re-encode replay clips to the exact requested length.
+    pub precise_clips: bool,
+    pub clips_dir: PathBuf,
+}
+
+/// What a running session actually uses, for the UI.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct SessionInfo {
+    pub strategy: String,
+    pub width: u32,
+    pub height: u32,
+    pub audio: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SessionMarker {
+    keep_full_session: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Segment {
+    pub index: u64,
+    pub path: PathBuf,
+    /// Seconds, CSV timeline; `None` while the segment is still being written.
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+}
+
+impl Segment {
+    pub fn duration(&self) -> Option<f64> {
+        Some(self.end? - self.start?)
+    }
+}
+
+struct Session {
+    child: Child,
+    started: Instant,
+    dir: PathBuf,
+    log_path: PathBuf,
+    list_path: PathBuf,
+    audio: Vec<AudioPipe>,
+    keep_full: bool,
+    replay_seconds: u32,
+    fps: u32,
+    clips_dir: PathBuf,
+    info: SessionInfo,
+    last_clip: Option<Instant>,
+    precise: bool,
+    encoder: Encoder,
+    rates: crate::encoding::CaptureEncoding,
+}
+
+pub struct Recorder {
+    ffmpeg: PathBuf,
+    ffprobe: Option<PathBuf>,
+    session: Option<Session>,
+    warning: Option<String>,
+}
+
+pub fn buffer_dir(clips_dir: &Path) -> PathBuf {
+    clips_dir.join(BUFFER_DIR_NAME)
+}
+
+/// `fs::canonicalize` yields `\?\C:\…` on Windows, which FFmpeg's concat
+/// demuxer and plain path comparisons cannot handle. Strip the prefix.
+pub fn plain_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+/// Forward slashes for FFmpeg list files and protocol strings.
+fn ffmpeg_path(path: &Path) -> String {
+    plain_path(path).to_string_lossy().replace('\\', "/")
+}
+
+fn segment_index(path: &Path) -> Option<u64> {
+    path.file_name()?
+        .to_str()?
+        .strip_prefix("seg-")?
+        .strip_suffix(".ts")?
+        .parse()
+        .ok()
+}
+
+/// Parses FFmpeg's CSV segment list: `name,start,end` per finished segment.
+pub fn parse_segment_list(text: &str, dir: &Path) -> Vec<Segment> {
+    let mut segments: Vec<Segment> = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.trim().rsplitn(3, ',');
+        let (Some(end), Some(start), Some(name)) = (fields.next(), fields.next(), fields.next()) else {
+            continue;
+        };
+        let path = dir.join(Path::new(name).file_name().unwrap_or_default());
+        let (Some(index), Ok(start), Ok(end)) =
+            (segment_index(&path), start.trim().parse::<f64>(), end.trim().parse::<f64>())
+        else {
+            continue;
+        };
+        if !(start.is_finite() && end.is_finite() && end >= start) {
+            continue;
+        }
+        if let Some(existing) = segments.iter_mut().find(|s| s.index == index) {
+            existing.start = Some(start);
+            existing.end = Some(end);
+        } else {
+            segments.push(Segment {
+                index,
+                path,
+                start: Some(start),
+                end: Some(end),
+            });
+        }
+    }
+    segments.sort_by_key(|s| s.index);
+    segments
+}
+
+/// All segment files in the buffer, finished ones annotated from the list.
+fn scan_segments(dir: &Path, list_path: &Path) -> Vec<Segment> {
+    let mut segments = parse_segment_list(&fs::read_to_string(list_path).unwrap_or_default(), dir);
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(index) = segment_index(&path) {
+                if !segments.iter().any(|s| s.index == index) {
+                    segments.push(Segment {
+                        index,
+                        path,
+                        start: None,
+                        end: None,
+                    });
+                }
+            }
+        }
+    }
+    segments.sort_by_key(|s| s.index);
+    segments.retain(|s| s.path.is_file());
+    segments
+}
+
+/// Picks the newest segments whose combined length covers `wanted` seconds.
+/// Unknown (in-progress) durations are estimated with `estimate`.
+pub fn tail_segments(segments: &[Segment], wanted: f64, estimate: f64) -> Vec<Segment> {
+    let mut chosen = Vec::new();
+    let mut total = 0.0;
+    for segment in segments.iter().rev() {
+        chosen.push(segment.clone());
+        total += segment.duration().unwrap_or(estimate).max(0.0);
+        if total >= wanted {
+            break;
+        }
+    }
+    chosen.reverse();
+    chosen
+}
+
+/// Segments older than the replay window plus a safety margin.
+pub fn expired_segments(segments: &[Segment], replay_seconds: u32) -> Vec<Segment> {
+    let Some(latest_end) = segments.iter().filter_map(|s| s.end).fold(None, |m: Option<f64>, e| {
+        Some(m.map_or(e, |m| m.max(e)))
+    }) else {
+        return Vec::new();
+    };
+    let keep_from = latest_end - f64::from(replay_seconds) - 2.0 * f64::from(SEGMENT_SECONDS);
+    segments
+        .iter()
+        .filter(|s| s.end.is_some_and(|end| end < keep_from))
+        .cloned()
+        .collect()
+}
+
+impl Recorder {
+    pub fn new(ffmpeg: PathBuf) -> Self {
+        let ffprobe = ffprobe_for(&ffmpeg);
+        Self {
+            ffmpeg,
+            ffprobe,
+            session: None,
+            warning: None,
+        }
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.session.is_some()
+    }
+
+    pub fn info(&self) -> Option<&SessionInfo> {
+        self.session.as_ref().map(|s| &s.info)
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        self.session
+            .as_ref()
+            .map_or(Duration::ZERO, |s| s.started.elapsed())
+    }
+
+    /// Bytes currently held in the segment buffer.
+    pub fn buffer_bytes(&self) -> u64 {
+        self.session
+            .as_ref()
+            .and_then(|s| fs::read_dir(&s.dir).ok())
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter_map(|e| e.metadata().ok())
+                    .map(|m| m.len())
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
+    /// A replay can be saved successfully even if something else went wrong.
+    pub fn take_warning(&mut self) -> Option<String> {
+        self.warning.take()
+    }
+
+    fn start_audio(config: &SessionConfig, warnings: &mut Vec<String>) -> Vec<AudioPipe> {
+        let mut pipes = Vec::new();
+        if config.system_audio {
+            match AudioPipe::start(AudioSource::Loopback) {
+                Ok(pipe) => pipes.push(pipe),
+                Err(error) => warnings.push(format!("Systemton nicht verfügbar: {error}")),
+            }
+        }
+        if let Some(device) = &config.microphone {
+            match AudioPipe::start(AudioSource::Microphone {
+                device_id: device.clone(),
+            }) {
+                Ok(pipe) => pipes.push(pipe),
+                Err(error) => warnings.push(format!("Mikrofon nicht verfügbar: {error}")),
+            }
+        }
+        pipes
+    }
+
+    /// Starts recording. Nothing is captured until this is called.
+    pub fn start(&mut self, config: SessionConfig) -> Result<SessionInfo, String> {
+        if self.session.is_some() {
+            return Err("Eine Aufnahme läuft bereits.".into());
+        }
+        if !cfg!(windows) {
+            return Err("Die Bildschirmaufnahme ist für Windows eingerichtet.".into());
+        }
+        if !(1..=240).contains(&config.fps) {
+            return Err("Die Bildrate muss zwischen 1 und 240 FPS liegen.".into());
+        }
+        fs::create_dir_all(&config.clips_dir)
+            .map_err(|error| format!("Der Clip-Ordner konnte nicht erstellt werden: {error}"))?;
+        let clips_dir = plain_path(
+            &fs::canonicalize(&config.clips_dir)
+                .map_err(|error| format!("Der Clip-Ordner ist nicht verfügbar: {error}"))?,
+        );
+        let dir = buffer_dir(&clips_dir);
+        prepare_buffer_dir(&dir)?;
+        let marker = serde_json::to_vec(&SessionMarker {
+            keep_full_session: config.keep_full_session,
+        })
+        .unwrap_or_default();
+        let _ = fs::write(dir.join("session.json"), marker);
+        let list_path = dir.join("segments.csv");
+        let log_path = dir.join("ffmpeg.log");
+        let strategies = capture::strategies(&config.display, config.encoder, config.capabilities.ddagrab);
+        let (width, height) = capture::output_size(&config.display, config.quality);
+        let mut failures = Vec::new();
+        for strategy in &strategies {
+            let mut warnings = Vec::new();
+            let audio = Self::start_audio(&config, &mut warnings);
+            let inputs: Vec<AudioInput> = audio.iter().map(|pipe| pipe.input.clone()).collect();
+            let _ = fs::remove_file(&list_path);
+            let log = File::create(&log_path)
+                .map_err(|error| format!("Das Aufnahmeprotokoll konnte nicht geöffnet werden: {error}"))?;
+            let mut command = capture::build_command(
+                &self.ffmpeg,
+                &CaptureRequest {
+                    display: &config.display,
+                    strategy,
+                    fps: config.fps,
+                    quality: config.quality,
+                    show_cursor: config.show_cursor,
+                    audio: &inputs,
+                    separate_microphone: config.microphone_separate_track && inputs.len() > 1,
+                    segment_dir: &dir,
+                    list_path: &list_path,
+                },
+            );
+            let description = capture::describe(&command);
+            let started = Instant::now();
+            let child = command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::from(log))
+                .spawn();
+            let mut child = match child {
+                Ok(child) => child,
+                Err(error) => {
+                    failures.push(format!("{}: {error}", strategy.label()));
+                    continue;
+                }
+            };
+            // Give FFmpeg a moment: device or encoder failures surface immediately.
+            let deadline = Instant::now() + Duration::from_millis(2000);
+            let mut died = None;
+            while Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        died = Some(status);
+                        break;
+                    }
+                    Ok(None) => thread::sleep(Duration::from_millis(50)),
+                    Err(error) => {
+                        died = None;
+                        failures.push(format!("{}: {error}", strategy.label()));
+                        let _ = child.kill();
+                        break;
+                    }
+                }
+            }
+            if let Some(status) = died {
+                let detail = log_detail(&log_path);
+                failures.push(format!("{} ({status}): {detail}", strategy.label()));
+                drop(audio);
+                continue;
+            }
+            if child.try_wait().ok().flatten().is_some() {
+                drop(audio);
+                continue;
+            }
+            let info = SessionInfo {
+                strategy: strategy.label(),
+                width,
+                height,
+                audio: audio.iter().map(|p| p.source.label().to_owned()).collect(),
+                warnings,
+            };
+            let _ = fs::write(dir.join("command.txt"), description);
+            self.session = Some(Session {
+                child,
+                started,
+                dir,
+                log_path,
+                list_path,
+                audio,
+                keep_full: config.keep_full_session,
+                replay_seconds: config.replay_seconds,
+                fps: config.fps,
+                clips_dir,
+                info: info.clone(),
+                last_clip: None,
+                precise: config.precise_clips,
+                encoder: strategy.encoder,
+                rates: {
+                    let (cw, ch, mbps) = config.quality.configured();
+                    crate::encoding::CaptureEncoding::for_output(width, height, config.fps, cw, ch, mbps)
+                },
+            });
+            return Ok(info);
+        }
+        let _ = fs::remove_dir_all(&dir);
+        Err(format!(
+            "Die Bildschirmaufnahme konnte nicht gestartet werden. {}",
+            failures.join(" · ")
+        ))
+    }
+
+    /// Call periodically while recording: surfaces failures and trims old segments.
+    pub fn poll(&mut self) -> Option<String> {
+        let session = self.session.as_mut()?;
+        match session.child.try_wait() {
+            Ok(None) => {}
+            Ok(Some(status)) => {
+                let session = self.session.take()?;
+                let detail = log_detail(&session.log_path);
+                return Some(format!(
+                    "Die Bildschirmaufnahme wurde unerwartet beendet ({status}). {detail}"
+                ));
+            }
+            Err(error) => {
+                if let Some(mut session) = self.session.take() {
+                    let _ = session.child.kill();
+                    let _ = session.child.wait();
+                }
+                return Some(format!("Der Aufnahmestatus konnte nicht geprüft werden: {error}"));
+            }
+        }
+        if !session.keep_full {
+            let segments = parse_segment_list(
+                &fs::read_to_string(&session.list_path).unwrap_or_default(),
+                &session.dir,
+            );
+            for expired in expired_segments(&segments, session.replay_seconds) {
+                let _ = fs::remove_file(expired.path);
+            }
+        }
+        None
+    }
+
+    /// Stops recording. Returns the full-session video when that mode is on.
+    pub fn stop(&mut self) -> Result<Option<PathBuf>, String> {
+        let mut session = self.session.take().ok_or("Es läuft keine Aufnahme.")?;
+        let status = finish_process(&mut session.child, Duration::from_secs(30));
+        for pipe in &mut session.audio {
+            pipe.stop();
+        }
+        let status = status.map_err(|error| format!("Die Aufnahme konnte nicht abgeschlossen werden: {error}"))?;
+        if !status.success() {
+            let detail = log_detail(&session.log_path);
+            if !session.keep_full {
+                let _ = fs::remove_dir_all(&session.dir);
+            }
+            return Err(format!("FFmpeg hat die Aufnahme nicht sauber beendet ({status}). {detail}"));
+        }
+        let mut saved = None;
+        if session.keep_full {
+            let segments = scan_segments(&session.dir, &session.list_path);
+            if segments.is_empty() {
+                let _ = fs::remove_dir_all(&session.dir);
+                return Err("Die Aufnahme hat keine Videodaten erzeugt.".into());
+            }
+            let output = clip_path(&session.clips_dir, "Aufnahme");
+            self.export_all(&segments, &output)?;
+            saved = Some(output);
+        }
+        let _ = fs::remove_dir_all(&session.dir);
+        Ok(saved)
+    }
+
+    /// Saves the last `seconds` of the running recording as a new clip.
+    /// The recording keeps running; nothing is re-encoded unless precise clips
+    /// are enabled. `prefix` names the file, e.g. the detected game.
+    pub fn save_replay(&mut self, seconds: u32, prefix: &str) -> Result<PathBuf, String> {
+        if seconds == 0 {
+            return Err("Die Cliplänge muss mindestens eine Sekunde betragen.".into());
+        }
+        let session = self.session.as_mut().ok_or("Starte zuerst eine Aufnahme.")?;
+        if session.started.elapsed() < Duration::from_millis(1500) {
+            return Err("Die Aufnahme ist noch zu kurz. Warte einen Moment.".into());
+        }
+        if session
+            .last_clip
+            .is_some_and(|at| at.elapsed() < CLIP_COOLDOWN)
+        {
+            return Err("Der letzte Clip wurde gerade erst gesichert.".into());
+        }
+        let segments = scan_segments(&session.dir, &session.list_path);
+        if segments.is_empty() {
+            return Err("Es liegen noch keine Videodaten vor. Warte einen Moment.".into());
+        }
+        let gop = 0.4_f64.max(f64::from(session.fps.max(1)).recip() * 4.0);
+        let elapsed = session.started.elapsed().as_secs_f64();
+        let finished_end = segments.iter().filter_map(|s| s.end).fold(0.0_f64, f64::max);
+        let estimate = (elapsed - finished_end).clamp(0.0, f64::from(SEGMENT_SECONDS) + 1.0);
+        let chosen = tail_segments(&segments, f64::from(seconds) + gop, estimate);
+        let prefix = sanitize_prefix(prefix);
+        let output = clip_path(&session.clips_dir, &prefix);
+        let export = export_tail(
+            &self.ffmpeg,
+            self.ffprobe.as_deref(),
+            &chosen,
+            f64::from(seconds),
+            gop,
+            &output,
+        )
+        .and_then(|()| {
+            if session.precise {
+                trim_to_exact_length(&self.ffmpeg, &output, f64::from(seconds), session.encoder, &session.rates)
+            } else {
+                Ok(())
+            }
+        });
+        match export {
+            Ok(()) => {
+                session.last_clip = Some(Instant::now());
+                Ok(output)
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&output);
+                Err(error)
+            }
+        }
+    }
+
+    fn export_all(&self, segments: &[Segment], output: &Path) -> Result<(), String> {
+        let dir = segments[0]
+            .path
+            .parent()
+            .ok_or("Der Pufferordner fehlt.")?
+            .to_path_buf();
+        let list_path = dir.join("export-list.txt");
+        let mut list = String::new();
+        for segment in segments {
+            let escaped = ffmpeg_path(&segment.path).replace('\'', "'\\''");
+            list.push_str(&format!("file '{escaped}'\n"));
+        }
+        fs::write(&list_path, list).map_err(|error| format!("Die Exportliste konnte nicht geschrieben werden: {error}"))?;
+        let result = command(&self.ffmpeg)
+            .current_dir(&dir)
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i"])
+            .arg(&list_path)
+            .args(["-c", "copy", "-movflags", "+faststart", "-f", "mp4"])
+            .arg(output)
+            .output()
+            .map_err(|error| format!("Die Aufnahme konnte nicht gespeichert werden: {error}"))?;
+        if !result.status.success() || fs::metadata(output).map_or(true, |m| m.len() == 0) {
+            let _ = fs::remove_file(output);
+            return Err(format!(
+                "Die Aufnahme konnte nicht gespeichert werden. {}",
+                diagnostic(&result.stderr)
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        if let Some(mut session) = self.session.take() {
+            let _ = finish_process(&mut session.child, Duration::from_secs(5));
+            for pipe in &mut session.audio {
+                pipe.stop();
+            }
+            if !session.keep_full {
+                let _ = fs::remove_dir_all(&session.dir);
+            }
+        }
+    }
+}
+
+fn prepare_buffer_dir(dir: &Path) -> Result<(), String> {
+    if dir.is_dir() {
+        let _ = fs::remove_dir_all(dir);
+    }
+    fs::create_dir_all(dir).map_err(|error| format!("Der Pufferordner konnte nicht erstellt werden: {error}"))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN};
+        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+        unsafe {
+            SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_HIDDEN);
+        }
+    }
+    Ok(())
+}
+
+/// Segments left behind by a crash. With full-session mode they become a
+/// recovered recording; otherwise they are simply removed.
+pub fn recover_leftovers(ffmpeg: &Path, clips_dir: &Path) -> Result<Option<PathBuf>, String> {
+    let dir = buffer_dir(clips_dir);
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    let marker: Option<SessionMarker> = fs::read(dir.join("session.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let segments = scan_segments(&dir, &dir.join("segments.csv"));
+    let mut saved = None;
+    if marker.is_some_and(|m| m.keep_full_session) && !segments.is_empty() {
+        let recorder = Recorder::new(ffmpeg.to_path_buf());
+        let output = clip_path(clips_dir, "Wiederhergestellte Aufnahme");
+        recorder.export_all(&segments, &output)?;
+        saved = Some(output);
+    }
+    let _ = fs::remove_dir_all(&dir);
+    Ok(saved)
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct Range {
+    start: f64,
+    duration: f64,
+}
+
+fn probe_range(ffprobe: &Path, path: &Path) -> Option<Range> {
+    let output = command(ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=start_time,duration",
+            "-of",
+            "default=noprint_wrappers=1",
+        ])
+        .arg(path)
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut range = Range::default();
+    let mut seen = 0;
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("start_time=") {
+            range.start = value.trim().parse().ok()?;
+            seen += 1;
+        } else if let Some(value) = line.strip_prefix("duration=") {
+            range.duration = value.trim().parse().ok()?;
+            seen += 1;
+        }
+    }
+    (seen == 2 && range.duration.is_finite() && range.start.is_finite()).then_some(range)
+}
+
+/// Presentation times of video keyframes in the file's own timeline.
+fn keyframes(ffprobe: &Path, path: &Path) -> Vec<f64> {
+    let Ok(output) = command(ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts_time,flags",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (pts, flags) = line.trim().split_once(',')?;
+            flags.starts_with('K').then(|| pts.parse::<f64>().ok()).flatten()
+        })
+        .collect()
+}
+
+/// Cuts the newest `seconds` out of `segments` into an MP4 without re-encoding.
+fn export_tail(
+    ffmpeg: &Path,
+    ffprobe: Option<&Path>,
+    segments: &[Segment],
+    seconds: f64,
+    gop: f64,
+    output: &Path,
+) -> Result<(), String> {
+    let first = segments.first().ok_or("Keine Segmente zum Sichern vorhanden.")?;
+    let last = segments.last().ok_or("Keine Segmente zum Sichern vorhanden.")?;
+    let dir = first.path.parent().ok_or("Der Pufferordner fehlt.")?;
+    let mut seek = None;
+    if let Some(ffprobe) = ffprobe {
+        if let (Some(first_range), Some(last_range)) =
+            (probe_range(ffprobe, &first.path), probe_range(ffprobe, &last.path))
+        {
+            let end = last_range.start + last_range.duration;
+            let target = end - seconds;
+            if target > first_range.start + 0.05 {
+                // Estimate where each segment starts in the file timeline from the
+                // list's offsets, then find the keyframe at or before the target so
+                // audio and video begin together and the clip is never short.
+                let base = first.start.unwrap_or(0.0);
+                let mut starts = Vec::with_capacity(segments.len());
+                let mut previous_end = base;
+                for segment in segments {
+                    let csv_start = segment.start.unwrap_or(previous_end);
+                    starts.push(first_range.start + (csv_start - base));
+                    previous_end = segment.end.unwrap_or(csv_start);
+                }
+                let containing = starts
+                    .iter()
+                    .rposition(|start| *start <= target)
+                    .unwrap_or(0);
+                let cut = keyframes(ffprobe, &segments[containing].path)
+                    .into_iter()
+                    .filter(|key| *key <= target + 0.0005)
+                    .fold(None, |best: Option<f64>, key| Some(best.map_or(key, |b| b.max(key))))
+                    .unwrap_or_else(|| (target - gop).max(first_range.start));
+                let relative = cut - first_range.start - 0.001;
+                if relative > 0.0 {
+                    seek = Some(relative);
+                }
+            }
+        }
+    }
+    if seek.is_none() && ffprobe.is_none() {
+        // Without ffprobe fall back to the listed durations and a keyframe margin.
+        let total: f64 = segments.iter().filter_map(Segment::duration).sum::<f64>()
+            + segments
+                .iter()
+                .filter(|s| s.duration().is_none())
+                .count() as f64
+                * f64::from(SEGMENT_SECONDS)
+                * 0.5;
+        let relative = total - seconds - gop;
+        if relative > 0.5 {
+            seek = Some(relative);
+        }
+    }
+    let input = format!(
+        "concat:{}",
+        segments
+            .iter()
+            .map(|s| s.path.file_name().unwrap_or_default().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("|")
+    );
+    let mut export = command(ffmpeg);
+    export
+        .current_dir(dir)
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"]);
+    if let Some(seek) = seek {
+        export.arg("-ss").arg(format!("{seek:.6}"));
+    }
+    let result = export
+        .args(["-i", &input, "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", "-f", "mp4"])
+        .arg(output)
+        .output()
+        .map_err(|error| format!("Der Clip konnte nicht gespeichert werden: {error}"))?;
+    if !result.status.success() {
+        return Err(format!(
+            "Der Clip konnte nicht gespeichert werden. {}",
+            diagnostic(&result.stderr)
+        ));
+    }
+    if fs::metadata(output).map_or(true, |metadata| metadata.len() == 0) {
+        return Err("Der Clip enthält keine Videodaten.".into());
+    }
+    Ok(())
+}
+
+fn finish_process(child: &mut Child, timeout: Duration) -> Result<std::process::ExitStatus, String> {
+    match child.try_wait() {
+        Ok(Some(status)) => return Ok(status),
+        Ok(None) => {}
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error.to_string());
+        }
+    }
+    if let Some(mut input) = child.stdin.take() {
+        let _ = input.write_all(b"q\n");
+        let _ = input.flush();
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(40)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("FFmpeg hat nicht rechtzeitig reagiert.".into());
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error.to_string());
+            }
+        }
+    }
+}
+
+/// Removes characters Windows does not allow in file names.
+pub fn sanitize_prefix(prefix: &str) -> String {
+    let cleaned: String = prefix
+        .chars()
+        .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let trimmed = cleaned.trim_end_matches('.').trim().to_owned();
+    if trimmed.is_empty() {
+        "Clip".into()
+    } else {
+        trimmed.chars().take(60).collect()
+    }
+}
+
+/// Re-encodes the tail of `path` in place so the clip lasts exactly `seconds`.
+fn trim_to_exact_length(
+    ffmpeg: &Path,
+    path: &Path,
+    seconds: f64,
+    encoder: Encoder,
+    rates: &crate::encoding::CaptureEncoding,
+) -> Result<(), String> {
+    let duration = probe_duration(ffmpeg, path)?;
+    let excess = duration - seconds;
+    if excess < 0.04 {
+        return Ok(());
+    }
+    let temporary = path.with_extension("exact.mp4");
+    let mut encode = command(ffmpeg);
+    encode
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss"])
+        .arg(format!("{excess:.6}"))
+        .arg("-i")
+        .arg(path)
+        .args(["-map", "0:v:0", "-map", "0:a?"]);
+    capture::encoder_args(&mut encode, encoder, rates, false);
+    let result = encode
+        .args(["-c:a", "copy", "-movflags", "+faststart", "-f", "mp4"])
+        .arg(&temporary)
+        .output()
+        .map_err(|error| format!("Der Clip konnte nicht exakt zugeschnitten werden: {error}"))?;
+    if !result.status.success() || fs::metadata(&temporary).map_or(true, |m| m.len() == 0) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "Der Clip konnte nicht exakt zugeschnitten werden. {}",
+            diagnostic(&result.stderr)
+        ));
+    }
+    fs::rename(&temporary, path).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        format!("Der exakte Clip konnte nicht gespeichert werden: {error}")
+    })
+}
+
+/// `Clip 2026-11-14 02-21-33.mp4`, with a counter when the name is taken.
+pub fn clip_path(directory: &Path, prefix: &str) -> PathBuf {
+    let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+    let base = format!("{prefix} {stamp}");
+    let mut candidate = directory.join(format!("{base}.mp4"));
+    let mut number = 2;
+    while candidate.exists() {
+        candidate = directory.join(format!("{base} ({number}).mp4"));
+        number += 1;
+    }
+    candidate
+}
+
+fn diagnostic(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let lines: Vec<_> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    lines[lines.len().saturating_sub(5)..]
+        .join(" ")
+        .chars()
+        .take(1600)
+        .collect()
+}
+
+fn log_detail(path: &Path) -> String {
+    fs::read(path).map(|bytes| diagnostic(&bytes)).unwrap_or_default()
+}
+
+/// Facts about a media file for the library and the editor.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MediaInfo {
+    pub duration: f64,
+    pub width: u32,
+    pub height: u32,
+    pub audio: bool,
+}
+
+pub fn probe_media(ffmpeg: &Path, input: &Path) -> Result<MediaInfo, String> {
+    if let Some(ffprobe) = ffprobe_for(ffmpeg) {
+        let output = command(&ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration:stream=codec_type,width,height",
+                "-of",
+                "json",
+            ])
+            .arg(input)
+            .output()
+            .map_err(|error| format!("Die Videodaten konnten nicht gelesen werden: {error}"))?;
+        if output.status.success() {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                let duration = value["format"]["duration"]
+                    .as_str()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                let mut info = MediaInfo {
+                    duration,
+                    ..MediaInfo::default()
+                };
+                for stream in value["streams"].as_array().into_iter().flatten() {
+                    match stream["codec_type"].as_str() {
+                        Some("video") if info.width == 0 => {
+                            info.width = stream["width"].as_u64().unwrap_or(0) as u32;
+                            info.height = stream["height"].as_u64().unwrap_or(0) as u32;
+                        }
+                        Some("audio") => info.audio = true,
+                        _ => {}
+                    }
+                }
+                if info.duration.is_finite() && info.duration > 0.0 && info.width > 0 {
+                    return Ok(info);
+                }
+            }
+        }
+    }
+    let output = command(ffmpeg)
+        .args(["-hide_banner", "-i"])
+        .arg(input)
+        .output()
+        .map_err(|error| format!("Die Videodaten konnten nicht gelesen werden: {error}"))?;
+    let text = String::from_utf8_lossy(&output.stderr);
+    let duration = parse_duration(&text).ok_or_else(|| {
+        format!("Die Datei enthält kein lesbares Video. {}", diagnostic(&output.stderr))
+    })?;
+    let (width, height) = parse_dimensions(&text).unwrap_or((0, 0));
+    Ok(MediaInfo {
+        duration,
+        width,
+        height,
+        audio: text.contains("Audio:"),
+    })
+}
+
+/// Returns the actual media duration, using FFprobe when available.
+pub fn probe_duration(ffmpeg: &Path, input: &Path) -> Result<f64, String> {
+    probe_media(ffmpeg, input).map(|info| info.duration)
+}
+
+fn parse_duration(text: &str) -> Option<f64> {
+    let duration = text.split("Duration: ").nth(1)?.split(',').next()?.trim();
+    let mut parts = duration.split(':');
+    let hours = parts.next()?.parse::<f64>().ok()?;
+    let minutes = parts.next()?.parse::<f64>().ok()?;
+    let seconds = parts.next()?.parse::<f64>().ok()?;
+    let total = hours * 3600.0 + minutes * 60.0 + seconds;
+    (total.is_finite() && total > 0.0).then_some(total)
+}
+
+fn parse_dimensions(text: &str) -> Option<(u32, u32)> {
+    let video = text.split("Video:").nth(1)?;
+    video
+        .split(|c: char| c == ',' || c == ' ')
+        .filter_map(|token| {
+            let (w, h) = token.split_once('x')?;
+            Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
+        })
+        .find(|(w, h)| *w > 0 && *h > 0)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrimMode {
+    /// Re-encode: exact boundaries, slower.
+    Precise,
+    /// Stream copy: starts at the previous keyframe, instant.
+    Fast,
+}
+
+/// Exports a section as a new MP4; the source file is never modified.
+pub fn trim_clip(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    start: f64,
+    end: f64,
+    mode: TrimMode,
+) -> Result<(), String> {
+    if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
+        return Err("Wähle einen gültigen Clipbereich mit Ende nach dem Anfang.".into());
+    }
+    if !input.is_file() {
+        return Err("Die ausgewählte Videodatei wurde nicht gefunden.".into());
+    }
+    if output.exists() {
+        return Err("Die Zieldatei existiert bereits. Wähle einen neuen Dateinamen.".into());
+    }
+    let duration = probe_duration(ffmpeg, input)?;
+    if start >= duration || end > duration + 0.1 {
+        return Err(format!(
+            "Der Clipbereich liegt außerhalb des Videos ({duration:.1} Sekunden)."
+        ));
+    }
+    // Exclusively reserve our destination before FFmpeg writes it. On failure only
+    // this owned file is removed; existing user files are never overwritten or deleted.
+    let destination = File::options()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .map_err(|error| format!("Die Zieldatei konnte nicht angelegt werden: {error}"))?;
+    drop(destination);
+    let length = end.min(duration) - start;
+    let mut export = command(ffmpeg);
+    export.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"]);
+    match mode {
+        TrimMode::Precise => {
+            export
+                .arg("-ss")
+                .arg(format!("{start:.6}"))
+                .arg("-i")
+                .arg(input)
+                .arg("-t")
+                .arg(format!("{length:.6}"))
+                .args([
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a?",
+                    "-vf",
+                    "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "20",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "160k",
+                ]);
+        }
+        TrimMode::Fast => {
+            export
+                .arg("-ss")
+                .arg(format!("{start:.6}"))
+                .arg("-i")
+                .arg(input)
+                .arg("-t")
+                .arg(format!("{length:.6}"))
+                .args(["-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-avoid_negative_ts", "make_zero"]);
+        }
+    }
+    let result = export
+        .args(["-movflags", "+faststart", "-f", "mp4"])
+        .arg(output)
+        .output()
+        .map_err(|error| {
+            let _ = fs::remove_file(output);
+            format!("Der Clip konnte nicht exportiert werden: {error}")
+        })?;
+    if !result.status.success() {
+        let _ = fs::remove_file(output);
+        return Err(format!(
+            "Der Clip konnte nicht exportiert werden. {}",
+            diagnostic(&result.stderr)
+        ));
+    }
+    if fs::metadata(output).map_or(true, |metadata| metadata.len() == 0) {
+        let _ = fs::remove_file(output);
+        return Err("Der Export hat keine Videodaten erzeugt.".into());
+    }
+    Ok(())
+}
+
+/// Writes a JPEG poster frame for the library.
+pub fn make_thumbnail(ffmpeg: &Path, input: &Path, output: &Path, at: f64) -> Result<(), String> {
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("Vorschauordner fehlt: {error}"))?;
+    }
+    let temporary = output.with_extension("tmp.jpg");
+    let result = command(ffmpeg)
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss"])
+        .arg(format!("{:.3}", at.max(0.0)))
+        .arg("-i")
+        .arg(input)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=480:-2",
+            "-q:v",
+            "4",
+            "-f",
+            "image2",
+        ])
+        .arg(&temporary)
+        .output()
+        .map_err(|error| format!("Vorschau fehlgeschlagen: {error}"))?;
+    if !result.status.success() || fs::metadata(&temporary).map_or(true, |m| m.len() == 0) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("Vorschau fehlgeschlagen. {}", diagnostic(&result.stderr)));
+    }
+    fs::rename(&temporary, output).map_err(|error| format!("Vorschau konnte nicht gespeichert werden: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_media_duration_and_rejects_invalid_media() {
+        assert_eq!(
+            parse_duration("Duration: 01:02:03.45, start: 0.0"),
+            Some(3723.45)
+        );
+        assert_eq!(parse_duration("Duration: N/A, start: 0.0"), None);
+        assert_eq!(parse_duration("Duration: 00:00:NaN, start: 0.0"), None);
+        assert_eq!(
+            parse_dimensions("Stream #0:0: Video: h264 (High), yuv420p(progressive), 1280x720 [SAR 1:1 DAR 16:9], 60 fps"),
+            Some((1280, 720))
+        );
+    }
+
+    #[test]
+    fn recording_must_be_started_before_stop_or_replay() {
+        let mut recorder = Recorder::new(PathBuf::from("missing-ffmpeg"));
+        assert!(!recorder.is_recording());
+        assert!(recorder.stop().is_err());
+        assert!(recorder.save_replay(30, "Clip").is_err());
+        assert_eq!(sanitize_prefix("  Counter-Strike: 2 ?? "), "Counter-Strike 2");
+        assert_eq!(sanitize_prefix(""), "Clip");
+        assert_eq!(sanitize_prefix("..."), "Clip");
+    }
+
+    #[test]
+    fn rejects_invalid_trim_ranges_before_running_ffmpeg() {
+        for (start, end) in [(1.0, 0.0), (-1.0, 5.0), (0.0, f64::NAN)] {
+            assert!(trim_clip(
+                Path::new("missing"),
+                Path::new("input"),
+                Path::new("output"),
+                start,
+                end,
+                TrimMode::Precise,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn segment_lists_are_parsed_and_tailed() {
+        let dir = Path::new("buffer");
+        let text = "seg-000000.ts,0.000000,5.016667\nseg-000001.ts,5.016667,10.000000\nbroken line\nseg-000002.ts,10.000000,15.050000\n";
+        let segments = parse_segment_list(text, dir);
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[1].path, dir.join("seg-000001.ts"));
+        assert!((segments[2].duration().unwrap() - 5.05).abs() < 1e-9);
+        let mut all = segments.clone();
+        all.push(Segment {
+            index: 3,
+            path: dir.join("seg-000003.ts"),
+            start: None,
+            end: None,
+        });
+        let tail = tail_segments(&all, 7.0, 2.0);
+        assert_eq!(tail.iter().map(|s| s.index).collect::<Vec<_>>(), vec![2, 3]);
+        let tail = tail_segments(&all, 7.1, 2.0);
+        assert_eq!(tail.iter().map(|s| s.index).collect::<Vec<_>>(), vec![1, 2, 3]);
+        let tail = tail_segments(&all, 100.0, 2.0);
+        assert_eq!(tail.len(), 4);
+        let tail = tail_segments(&all, 1.0, 2.0);
+        assert_eq!(tail.iter().map(|s| s.index).collect::<Vec<_>>(), vec![3]);
+        // Keep 30 s plus two segments of margin: with 15 s recorded nothing expires.
+        assert!(expired_segments(&all, 30).is_empty());
+        let mut long = Vec::new();
+        for index in 0..20_u64 {
+            long.push(Segment {
+                index,
+                path: dir.join(format!("seg-{index:06}.ts")),
+                start: Some(index as f64 * 5.0),
+                end: Some(index as f64 * 5.0 + 5.0),
+            });
+        }
+        let expired = expired_segments(&long, 30);
+        // latest end 100 s; keep from 100 - 30 - 10 = 60 s → segments ending before 60 s.
+        assert_eq!(expired.last().map(|s| s.index), Some(10));
+        assert_eq!(expired.len(), 11);
+    }
+
+    #[test]
+    fn verbatim_prefixes_are_removed_for_ffmpeg() {
+        assert_eq!(plain_path(Path::new(r"\\?\C:\Clips\a.mp4")), PathBuf::from(r"C:\Clips\a.mp4"));
+        assert_eq!(plain_path(Path::new(r"\\?\UNC\nas\share\a.mp4")), PathBuf::from(r"\\nas\share\a.mp4"));
+        assert_eq!(plain_path(Path::new(r"C:\Clips\a.mp4")), PathBuf::from(r"C:\Clips\a.mp4"));
+        assert_eq!(ffmpeg_path(Path::new(r"\\?\C:\Clips\seg-000001.ts")), "C:/Clips/seg-000001.ts");
+    }
+
+    #[test]
+    fn clip_names_are_dated_and_unique() {
+        let dir = env::temp_dir().join(format!("stillclip-names-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let first = clip_path(&dir, "Clip");
+        assert!(first.file_name().unwrap().to_string_lossy().starts_with("Clip 20"));
+        fs::write(&first, b"x").unwrap();
+        let second = clip_path(&dir, "Clip");
+        assert_ne!(first, second);
+        assert!(second.to_string_lossy().ends_with(" (2).mp4"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "requires local FFmpeg; uses generated test video, never screen capture"]
+    fn synthetic_video_can_be_trimmed_to_playable_mp4() {
+        let ffmpeg = find_ffmpeg().expect("local FFmpeg is required");
+        let directory = env::temp_dir().join(format!("stillclip-recorder-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("source.mp4");
+        let result = command(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-n",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x180:rate=15",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "4",
+                "-c:v",
+                "libx264",
+                "-g",
+                "15",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+            ])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{}", diagnostic(&result.stderr));
+        let original_bytes = fs::read(&source).unwrap();
+        let info = probe_media(&ffmpeg, &source).unwrap();
+        assert_eq!((info.width, info.height), (320, 180));
+        assert!(info.audio);
+        for (mode, name) in [(TrimMode::Precise, "precise.mp4"), (TrimMode::Fast, "fast.mp4")] {
+            let trimmed = directory.join(name);
+            trim_clip(&ffmpeg, &source, &trimmed, 1.0, 3.0, mode).unwrap();
+            let duration = probe_duration(&ffmpeg, &trimmed).unwrap();
+            // Fast mode starts at the previous keyframe (one second apart here).
+            assert!((1.9..=3.2).contains(&duration), "wrong duration: {duration}");
+            assert!(trim_clip(&ffmpeg, &source, &trimmed, 0.0, 1.0, mode).is_err(), "must not overwrite");
+        }
+        assert_eq!(fs::read(&source).unwrap(), original_bytes, "original must stay intact");
+        let thumbnail = directory.join("thumbs").join("source.jpg");
+        make_thumbnail(&ffmpeg, &source, &thumbnail, 1.0).unwrap();
+        assert!(fs::metadata(&thumbnail).unwrap().len() > 500);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    /// Records the primary display with system audio for `STILLCLIP_SYNC_SECONDS`
+    /// seconds into `STILLCLIP_SYNC_OUT` so the result can be analysed for A/V sync.
+    #[test]
+    #[ignore = "records the developer's own screen; run on purpose"]
+    fn sync_capture() {
+        let Some(out) = env::var_os("STILLCLIP_SYNC_OUT") else {
+            eprintln!("STILLCLIP_SYNC_OUT not set; skipping");
+            return;
+        };
+        let seconds: u64 = env::var("STILLCLIP_SYNC_SECONDS").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
+        let ffmpeg = find_ffmpeg().expect("local FFmpeg is required");
+        let dir = PathBuf::from(out);
+        fs::create_dir_all(&dir).unwrap();
+        let displays = capture::displays();
+        let wanted = env::var("STILLCLIP_SYNC_DISPLAY").unwrap_or_default();
+        let display = displays
+            .iter()
+            .find(|d| !wanted.is_empty() && d.name.contains(&wanted))
+            .or_else(|| capture::choose_display(&displays, ""))
+            .expect("a display")
+            .clone();
+        eprintln!("display {display:?}");
+        let capabilities = capture::probe_capabilities(&ffmpeg, &dir);
+        let mut recorder = Recorder::new(ffmpeg.clone());
+        let info = recorder
+            .start(SessionConfig {
+                display,
+                encoder: capture::select_encoder(crate::settings::EncoderChoice::Auto, &capabilities.encoders),
+                capabilities,
+                fps: 60,
+                quality: Quality::P720,
+                show_cursor: false,
+                system_audio: true,
+                microphone: None,
+                microphone_separate_track: false,
+                replay_seconds: 30,
+                keep_full_session: true,
+                precise_clips: false,
+                clips_dir: dir.clone(),
+            })
+            .unwrap();
+        eprintln!("session {info:?}");
+        thread::sleep(Duration::from_secs(seconds));
+        let full = recorder.stop().unwrap().expect("full session video");
+        eprintln!("SYNC_OUTPUT={}", full.display());
+    }
+
+    /// A real six-second capture of the primary display with system audio.
+    /// Run explicitly on a development machine: `cargo test real_capture -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "records the developer's own screen for a few seconds"]
+    fn real_capture_smoke() {
+        let ffmpeg = find_ffmpeg().expect("local FFmpeg is required");
+        let dir = env::temp_dir().join(format!("stillclip-real-capture-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let displays = capture::displays();
+        let display = capture::choose_display(&displays, "").expect("a display").clone();
+        let capabilities = capture::probe_capabilities(&ffmpeg, &dir);
+        eprintln!("display {display:?}
+capabilities {capabilities:?}");
+        let mut recorder = Recorder::new(ffmpeg.clone());
+        let info = recorder
+            .start(SessionConfig {
+                display,
+                encoder: capture::select_encoder(crate::settings::EncoderChoice::Auto, &capabilities.encoders),
+                capabilities,
+                fps: 60,
+                quality: Quality::P720,
+                show_cursor: false,
+                system_audio: true,
+                microphone: None,
+                microphone_separate_track: false,
+                replay_seconds: 30,
+                keep_full_session: true,
+                precise_clips: true,
+                clips_dir: dir.clone(),
+            })
+            .unwrap();
+        eprintln!("session {info:?}");
+        assert!(info.warnings.is_empty(), "{:?}", info.warnings);
+        assert_eq!(info.audio, vec!["Systemton".to_owned()]);
+        thread::sleep(Duration::from_secs(7));
+        assert!(recorder.poll().is_none());
+        let clip = recorder.save_replay(4, "Testspiel: Runde?").unwrap();
+        let clip_info = probe_media(&ffmpeg, &clip).unwrap();
+        eprintln!("clip {clip:?} {clip_info:?}");
+        assert!(clip.file_name().unwrap().to_string_lossy().starts_with("Testspiel Runde 20"));
+        assert!(clip_info.audio, "replay must carry system audio");
+        assert!((3.9..=4.15).contains(&clip_info.duration), "precise replay length {}", clip_info.duration);
+        assert_eq!((clip_info.width, clip_info.height), (1280, 720));
+        thread::sleep(Duration::from_secs(2));
+        let full = recorder.stop().unwrap().expect("full session video");
+        let full_info = probe_media(&ffmpeg, &full).unwrap();
+        eprintln!("full {full:?} {full_info:?}");
+        assert!(full_info.audio);
+        assert!((8.0..=14.0).contains(&full_info.duration), "full length {}", full_info.duration);
+        assert!(!buffer_dir(&dir).exists(), "buffer must be cleaned up");
+        // Audio and video should end together: no drift after ten seconds.
+        let ffprobe = ffprobe_for(&ffmpeg).expect("ffprobe");
+        let output = command(&ffprobe)
+            .args(["-v", "error", "-show_entries", "stream=codec_type,duration", "-of", "csv=p=0"])
+            .arg(&full)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        eprintln!("streams {text}");
+        let mut durations = Vec::new();
+        for line in text.lines() {
+            if let Some((_, duration)) = line.trim().split_once(',') {
+                if let Ok(value) = duration.parse::<f64>() {
+                    durations.push(value);
+                }
+            }
+        }
+        assert_eq!(durations.len(), 2, "{text}");
+        assert!((durations[0] - durations[1]).abs() < 0.25, "audio/video drift: {durations:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "requires local FFmpeg; uses generated test video, never screen capture"]
+    fn synthetic_segments_export_a_keyframe_aligned_tail() {
+        let ffmpeg = find_ffmpeg().expect("local FFmpeg is required");
+        let ffprobe = ffprobe_for(&ffmpeg);
+        let dir = env::temp_dir().join(format!("stillclip-segments-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let list_path = dir.join("segments.csv");
+        let result = command(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x180:rate=30",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "12.5",
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-g",
+                "12",
+                "-bf",
+                "0",
+                "-c:a",
+                "aac",
+                "-f",
+                "segment",
+                "-segment_time",
+            ])
+            .arg(SEGMENT_SECONDS.to_string())
+            .args([
+                "-segment_format",
+                "mpegts",
+                "-segment_list_type",
+                "csv",
+                "-segment_list",
+            ])
+            .arg(&list_path)
+            .arg(dir.join("seg-%06d.ts"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{}", diagnostic(&result.stderr));
+        let segments = scan_segments(&dir, &list_path);
+        assert!(segments.len() >= 3, "{segments:?}");
+        let chosen = tail_segments(&segments, 6.4, 2.5);
+        let output = dir.join("tail.mp4");
+        export_tail(&ffmpeg, ffprobe.as_deref(), &chosen, 6.0, 0.4, &output).unwrap();
+        let info = probe_media(&ffmpeg, &output).unwrap();
+        assert!(info.audio);
+        assert!(
+            (6.0..=6.6).contains(&info.duration),
+            "tail should be about six seconds, got {}",
+            info.duration
+        );
+        let recorder = Recorder::new(ffmpeg.clone());
+        let full = dir.join("full.mp4");
+        recorder.export_all(&segments, &full).unwrap();
+        let full_info = probe_media(&ffmpeg, &full).unwrap();
+        assert!((full_info.duration - 12.5).abs() < 0.3, "{}", full_info.duration);
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

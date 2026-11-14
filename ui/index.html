@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src http://clip.localhost data:; media-src http://clip.localhost; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Stillclip</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <svg aria-hidden="true" class="sprite"><defs>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="m10 3-.7 2.2-2 .9-2.2-.5-2 3.4 1.5 1.7v2.6L3.1 15l2 3.4 2.2-.5 2 .9L10 21h4l.7-2.2 2-.9 2.2.5 2-3.4-1.5-1.7v-2.6L20.9 9l-2-3.4-2.2.5-2-.9L14 3z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4M12 14v3"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M12 17v4M8 21h8"/></symbol>
+    <symbol id="i-replay" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 1.8 7.4M3 4v6h6M12 7v5l3 2"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7zM3 9h18"/></symbol>
+    <symbol id="i-import" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-sort" viewBox="0 0 24 24"><path d="M8 4v16m-4-4 4 4 4-4M14 5h7M14 10h5M14 15h3"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4M7 12h10"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-5-5 5 5-5 5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 8a8 8 0 0 0-14-2L3 9m0-6v6h6M4 16a8 8 0 0 0 14 2l3-3m0 6v-6h-6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="5" cy="6" r="3"/><circle cx="5" cy="18" r="3"/><path d="m8 8 13 13M8 16 21 3M14 10l-3 3"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 4h3v16H7zM14 4h3v16h-3z"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.1"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><path d="m11 4-5 4H3v8h3l5 4V4zm4 4a5 5 0 0 1 0 8m3-11a9 9 0 0 1 0 14"/></symbol>
+    <symbol id="i-sound-off" viewBox="0 0 24 24"><path d="m11 4-5 4H3v8h3l5 4V4zm6 5 5 6m0-6-5 6"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+    <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.1M10 10h.1M14 10h.1M18 10h.1M8 14h8"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+    <symbol id="i-tray" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M3 12h5l2 3h4l2-3h5M8 20h8"/></symbol>
+    <symbol id="i-skip-back" viewBox="0 0 24 24"><path d="M18 5v14L8 12zM6 5v14"/></symbol>
+    <symbol id="i-skip-forward" viewBox="0 0 24 24"><path d="M6 5v14l10-7zM18 5v14"/></symbol>
+    <symbol id="i-loop" viewBox="0 0 24 24"><path d="M17 3l4 4-4 4M3 11V9a2 2 0 0 1 2-2h16M7 21l-4-4 4-4M21 13v2a2 2 0 0 1-2 2H3"/></symbol>
+    <symbol id="i-marker-in" viewBox="0 0 24 24"><path d="M5 4v16M5 12h12m-4-4 4 4-4 4"/></symbol>
+    <symbol id="i-marker-out" viewBox="0 0 24 24"><path d="M19 4v16M19 12H7m4-4-4 4 4 4"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
+    <symbol id="i-warning" viewBox="0 0 24 24"><path d="M12 3 2 20h20zM12 10v4M12 17v.1"/></symbol>
+  </defs></svg>
+
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">stillclip<span class="brand-dot">.</span></span></div>
+      <div class="nav-label">Dein Studio</div>
+      <nav class="nav" aria-label="Hauptnavigation">
+        <button class="nav-item active" id="nav-library" title="Bibliothek" aria-current="page"><svg><use href="#i-grid"/></svg><span>Bibliothek</span><span class="count" id="nav-count">0</span></button>
+        <button class="nav-item" id="nav-settings" title="Einstellungen"><svg><use href="#i-settings"/></svg><span>Einstellungen</span></button>
+      </nav>
+      <div class="side-session" id="side-session">
+        <div class="side-session-row"><span class="status-dot"></span><span id="side-session-label">Bereit</span></div>
+        <div class="side-session-timer" id="side-session-timer">00:00:00</div>
+        <div class="side-session-game" id="side-session-game" hidden></div>
+        <div class="side-session-hint" id="side-session-hint">Moment sichern mit <kbd id="side-hotkey">F8</kbd></div>
+      </div>
+      <div class="sidebar-footer">
+        <div class="local-badge"><svg><use href="#i-lock"/></svg><span>100 % auf deinem PC</span></div>
+        <p>Deine Momente.<br>Deine Dateien. Dein Speicher.</p>
+        <p class="version" id="version"></p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section id="page-library" aria-label="Clip-Bibliothek">
+        <header class="header">
+          <div><p class="eyebrow">KLEINE CLIPS. GROSSE MOMENTE.</p><h1>Deine besten Momente.</h1><p>Festhalten, was bleibt. Direkt auf deinem Rechner.</p></div>
+          <span class="tag"><svg><use href="#i-lock"/></svg>Lokal &amp; privat</span>
+        </header>
+
+        <div class="setup-banner" id="setup-banner" hidden>
+          <div class="setup-text"><svg><use href="#i-info"/></svg><span>Für Aufnahmen und Zuschnitte wird FFmpeg benötigt. Wähle die Datei <code>ffmpeg.exe</code> aus.</span></div>
+          <button class="btn" data-action="choose_ffmpeg">FFmpeg auswählen<svg><use href="#i-arrow"/></svg></button>
+        </div>
+
+        <section class="record-card" id="record-card" aria-label="Bildschirm aufnehmen">
+          <div class="record-content">
+            <div class="record-status"><span class="status-dot"></span><span id="record-status">Bereit für deinen Moment</span><span class="game-chip" id="game-chip" hidden></span></div>
+            <h2 id="record-title">Ein guter Moment? Behalte ihn.</h2>
+            <p id="record-description">Starte die Aufnahme. Stillclip merkt sich die letzten Sekunden und sichert sie auf Tastendruck – ohne Lücke, ohne Riesendateien.</p>
+            <div class="record-actions">
+              <button class="btn btn-primary" id="record-button" disabled><span class="record-icon"></span><span id="record-button-text">Aufnahme starten</span></button>
+              <button class="btn btn-quiet" id="replay-button" title="Moment sichern" disabled><svg><use href="#i-replay"/></svg><span id="replay-button-text">Letzte 30 Sek. sichern</span></button>
+            </div>
+            <div class="shortcut-hint" id="shortcut-hint">Moment sichern mit <kbd id="hotkey-replay-label">F8</kbd><span id="hotkey-record-hint" hidden> · Aufnahme starten/beenden mit <kbd id="hotkey-record-label"></kbd></span></div>
+            <div class="capture-meta" id="capture-meta"></div>
+            <div class="session-warnings" id="session-warnings" hidden></div>
+          </div>
+          <div class="monitor-wrap" aria-hidden="true">
+            <div class="monitor"><div class="monitor-screen"><svg><use href="#i-play"/></svg></div></div>
+            <div class="monitor-stand"></div>
+            <div class="timer-chip"><span class="timer-dot"></span><span id="timer">00:00:00</span></div>
+          </div>
+        </section>
+
+        <section aria-labelledby="library-heading">
+          <div class="section-heading">
+            <div class="section-title"><h2 id="library-heading">Deine Bibliothek</h2><span class="library-count" id="library-count">0</span></div>
+            <div class="section-buttons">
+              <button class="icon-btn" data-action="rescan" title="Bibliothek und Geräte aktualisieren" aria-label="Bibliothek und Geräte aktualisieren"><svg><use href="#i-refresh"/></svg></button>
+              <button class="icon-btn" data-action="open_folder" title="Clip-Ordner öffnen" aria-label="Clip-Ordner öffnen"><svg><use href="#i-folder"/></svg></button>
+              <button class="btn" data-action="import"><svg><use href="#i-import"/></svg>Importieren</button>
+            </div>
+          </div>
+          <div class="toolbar">
+            <div class="search-wrap"><svg aria-hidden="true"><use href="#i-search"/></svg><input class="search" id="search" type="search" aria-label="Clips durchsuchen" placeholder="Clips durchsuchen …" autocomplete="off"></div>
+            <div class="sort-wrap"><svg aria-hidden="true"><use href="#i-sort"/></svg><select id="sort" aria-label="Clips sortieren"><option value="newest">Neueste zuerst</option><option value="oldest">Älteste zuerst</option><option value="name">Name A–Z</option><option value="size">Größte zuerst</option><option value="longest">Längste zuerst</option></select></div>
+          </div>
+          <div class="empty-state" id="empty-state">
+            <div class="empty-icon"><svg><use href="#i-film"/></svg></div>
+            <h3>Hier beginnt deine Sammlung.</h3>
+            <p>Dein erster Clip ist nur einen Moment entfernt.<br>Starte eine Aufnahme oder importiere ein Video.</p>
+            <button class="text-button" data-action="import">Dein erstes Video importieren<svg><use href="#i-arrow"/></svg></button>
+          </div>
+          <div class="empty-state no-results" id="no-results" hidden>
+            <div class="empty-icon"><svg><use href="#i-search"/></svg></div>
+            <h3>Kein passender Clip.</h3>
+            <p>Versuch es mit einem anderen Suchbegriff.</p>
+            <button class="text-button" id="reset-search">Suche zurücksetzen<svg><use href="#i-arrow"/></svg></button>
+          </div>
+          <div class="grid" id="clip-grid"></div>
+          <div class="steps" id="first-steps">
+            <div class="step"><span class="step-number">01</span><div><strong>Aufnahme starten</strong><p>Stillclip läuft im Hintergrund mit.</p></div></div>
+            <div class="step"><span class="step-number">02</span><div><strong>Moment sichern</strong><p>Taste drücken, die letzten Sekunden bleiben.</p></div></div>
+            <div class="step"><span class="step-number">03</span><div><strong>Clip zuschneiden</strong><p>Nur das, was zählt.</p></div></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="settings" id="page-settings" aria-label="Einstellungen" hidden>
+        <header class="header"><div><p class="eyebrow">DEIN STUDIO, DEINE REGELN.</p><h1>Ganz wie du willst.</h1><p>Einmal einrichten. Momente festhalten.</p></div></header>
+
+        <div class="settings-card">
+          <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-bolt"/></svg></div><div><h2>Spiele</h2><p>Stillclip erkennt dein Spiel und nimmt von selbst auf.</p></div></div>
+          <div class="settings-body">
+            <div class="setting-row"><div><div class="setting-label">Aufnahme automatisch starten</div><div class="setting-help">Sobald ein Spiel aus der Liste ein Fenster öffnet, läuft der Rückblick. Endet das Spiel, stoppt die Aufnahme wieder. Clips tragen den Spielnamen.</div></div><label class="switch"><input type="checkbox" id="setting-auto-games"><span class="slider"></span></label></div>
+            <div class="setting-row"><div><div class="setting-label">Bekannte Spiele erkennen</div><div class="setting-help" id="builtin-games-help">Eingebaute Liste beliebter Spiele.</div></div><label class="switch"><input type="checkbox" id="setting-builtin-games"><span class="slider"></span></label></div>
+            <div class="setting-label">Eigene Spiele und Programme</div>
+            <div class="game-list" id="game-list"></div>
+            <div class="game-add">
+              <select id="app-picker" aria-label="Laufendes Programm"><option value="">Laufendes Programm wählen …</option></select>
+              <button class="btn" id="add-running-app">Hinzufügen</button>
+              <button class="icon-btn" id="refresh-apps" title="Laufende Programme neu einlesen" aria-label="Laufende Programme neu einlesen"><svg><use href="#i-refresh"/></svg></button>
+              <button class="btn btn-quiet" id="pick-game"><svg><use href="#i-folder"/></svg>EXE auswählen …</button>
+            </div>
+            <p class="setting-note">Starte das Spiel, lies die Liste neu ein und wähle es aus. Änderungen hier gelten sofort.</p>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-monitor"/></svg></div><div><h2>Aufnahme</h2><p>Welcher Bildschirm, wie scharf, wie flüssig.</p></div></div>
+          <div class="settings-body">
+            <div class="setting-row"><div><div class="setting-label">Bildschirm</div><div class="setting-help">Dieser Bildschirm wird aufgenommen.</div></div><select id="setting-display" aria-label="Bildschirm"></select></div>
+            <div class="setting-row"><div><div class="setting-label">Qualität</div><div class="setting-help" id="quality-help">Höhere Auflösung bedeutet größere Dateien.</div></div><select id="setting-quality" aria-label="Qualität"><option value="p720">720p · 15 Mbit/s (Standard)</option><option value="p1080">1080p · 25 Mbit/s</option><option value="p1440">1440p · 40 Mbit/s</option><option value="native">Nativ · volle Bildschirmauflösung</option></select></div>
+            <div class="setting-row"><div><div class="setting-label">Bildrate</div><div class="setting-help">Mehr Bilder pro Sekunde benötigen mehr Leistung.</div></div><select id="setting-fps" aria-label="Bildrate"></select></div>
+            <div class="setting-row"><div><div class="setting-label">Encoder</div><div class="setting-help" id="encoder-help">Automatisch nutzt die Grafikkarte, wenn möglich.</div></div><select id="setting-encoder" aria-label="Encoder"><option value="auto">Automatisch</option></select></div>
+            <div class="setting-row"><div><div class="setting-label">Mauszeiger aufnehmen</div><div class="setting-help">Der Zeiger erscheint im Video.</div></div><label class="switch"><input type="checkbox" id="setting-cursor"><span class="slider"></span></label></div>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-sound"/></svg></div><div><h2>Ton</h2><p>Spielsound und Stimme landen gemischt im Clip.</p></div></div>
+          <div class="settings-body">
+            <div class="setting-row"><div><div class="setting-label">Systemton aufnehmen</div><div class="setting-help" id="system-audio-help">Alles, was über dein Standard-Wiedergabegerät läuft.</div></div><label class="switch"><input type="checkbox" id="setting-system-audio"><span class="slider"></span></label></div>
+            <div class="setting-row"><div><div class="setting-label">Mikrofon aufnehmen</div><div class="setting-help">Deine Stimme wird in den Clip gemischt.</div></div><label class="switch"><input type="checkbox" id="setting-microphone"><span class="slider"></span></label></div>
+            <div class="setting-row" id="microphone-device-row"><div><div class="setting-label">Mikrofon</div><div class="setting-help">Welches Gerät verwendet wird.</div></div><select id="setting-microphone-device" aria-label="Mikrofon"></select></div>
+            <div class="setting-row" id="microphone-separate-row"><div><div class="setting-label">Mikrofon zusätzlich als eigene Tonspur</div><div class="setting-help">Spur 1 bleibt der Mix, Spur 2 enthält nur deine Stimme – praktisch zum Nachbearbeiten.</div></div><label class="switch"><input type="checkbox" id="setting-mic-separate"><span class="slider"></span></label></div>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-replay"/></svg></div><div><h2>Rückblick</h2><p>So viel Vergangenheit hält Stillclip für dich bereit.</p></div></div>
+          <div class="settings-body">
+            <div class="setting-row"><div><div class="setting-label">Länge deiner Moment-Clips</div><div class="setting-help">So viele Sekunden werden beim Sichern behalten.</div></div><select id="setting-replay" aria-label="Länge der Moment-Clips"></select></div>
+            <div class="setting-row" id="setting-replay-custom-row" hidden><div><label class="setting-label" for="setting-replay-custom">Eigene Länge in Sekunden</label><div class="setting-help" id="setting-replay-help">15 bis 1200 Sekunden (20 Minuten).</div></div><input class="input input-short" id="setting-replay-custom" type="number" min="15" max="1200" step="1" value="30" required aria-describedby="setting-replay-help"></div>
+            <div class="setting-row"><div><div class="setting-label">Clips exakt zuschneiden</div><div class="setting-help">Normalerweise beginnt ein Clip am vorherigen Keyframe und ist bis zu 0,4 s länger. Exakt kodiert den Clip nach dem Sichern noch einmal auf die Sekunde genau – dauert bei GPU-Encodern nur einen Moment.</div></div><label class="switch"><input type="checkbox" id="setting-precise"><span class="slider"></span></label></div>
+            <div class="setting-row"><div><div class="setting-label">Ganze Sitzung behalten</div><div class="setting-help">Beim Beenden wird zusätzlich die komplette Aufnahme als Video gespeichert. Braucht viel Speicherplatz.</div></div><label class="switch"><input type="checkbox" id="setting-full-session"><span class="slider"></span></label></div>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-keyboard"/></svg></div><div><h2>Tastenkürzel</h2><p>Funktionieren überall, auch im Spiel.</p></div></div>
+          <div class="settings-body">
+            <div class="setting-row"><div><div class="setting-label">Moment sichern</div><div class="setting-help">Klicke ins Feld und drücke die gewünschte Taste. Rücktaste entfernt das Kürzel.</div></div><div class="hotkey-wrap"><input class="input hotkey" id="hotkey-replay" readonly value="F8" aria-label="Tastenkürzel Moment sichern"><button class="icon-btn" id="hotkey-replay-clear" title="Kürzel entfernen"><svg><use href="#i-close"/></svg></button></div></div>
+            <div class="setting-row"><div><div class="setting-label">Aufnahme starten / beenden</div><div class="setting-help">Optional. Schaltet die Aufnahme um, ohne das Fenster zu öffnen.</div></div><div class="hotkey-wrap"><input class="input hotkey" id="hotkey-record" readonly value="" placeholder="Nicht belegt" aria-label="Tastenkürzel Aufnahme umschalten"><button class="icon-btn" id="hotkey-record-clear" title="Kürzel entfernen"><svg><use href="#i-close"/></svg></button></div></div>
+            <p class="setting-note" id="hotkey-failures" hidden></p>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-tray"/></svg></div><div><h2>Verhalten</h2><p>Stillclip bleibt leise im Hintergrund.</p></div></div>
+          <div class="settings-body">
+            <div class="setting-row"><div><div class="setting-label">Hinweis im Spiel anzeigen</div><div class="setting-help">Kurzes Banner oben rechts, wenn ein Moment gesichert wurde oder die Aufnahme startet. Erscheint über Fenster- und randlosen Vollbildspielen.</div></div><label class="switch"><input type="checkbox" id="setting-overlay"><span class="slider"></span></label></div>
+            <div class="setting-row"><div><div class="setting-label">Ton beim Sichern</div><div class="setting-help">Ein kurzer Bestätigungsklang, damit du weißt, dass der Clip da ist.</div></div><label class="switch"><input type="checkbox" id="setting-clip-sound"><span class="slider"></span></label></div>
+            <div class="setting-row"><div><div class="setting-label">Beim Schließen im Infobereich weiterlaufen</div><div class="setting-help">Das Fenster verschwindet, Aufnahme und Tastenkürzel bleiben aktiv. Beenden über das Symbol neben der Uhr.</div></div><label class="switch"><input type="checkbox" id="setting-close-to-tray"><span class="slider"></span></label></div>
+            <div class="setting-row"><div><div class="setting-label">Aufnahme beim Start beginnen</div><div class="setting-help">Sobald Stillclip startet, läuft der Rückblick.</div></div><label class="switch"><input type="checkbox" id="setting-record-on-launch"><span class="slider"></span></label></div>
+            <div class="setting-row"><div><div class="setting-label">Minimiert starten</div><div class="setting-help">Nur das Symbol im Infobereich, kein Fenster.</div></div><label class="switch"><input type="checkbox" id="setting-start-minimized"><span class="slider"></span></label></div>
+            <div class="setting-row"><div><div class="setting-label">Mit Windows starten</div><div class="setting-help">Trägt Stillclip in den Autostart deines Benutzerkontos ein.</div></div><label class="switch"><input type="checkbox" id="setting-autostart"><span class="slider"></span></label></div>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-folder"/></svg></div><div><h2>Dein Clip-Ordner</h2><p>Alle Aufnahmen und importierten Videos an einem Ort.</p></div></div>
+          <div class="settings-body">
+            <div class="setting-label">Speicherort</div>
+            <div class="path-box" id="clips-directory">Wird geladen …</div>
+            <div class="section-buttons">
+              <button class="btn" data-action="choose_folder"><svg><use href="#i-folder"/></svg>Ordner wählen</button>
+              <button class="btn btn-quiet" data-action="open_folder">Ordner öffnen<svg><use href="#i-arrow"/></svg></button>
+            </div>
+            <p class="setting-note">Während einer Aufnahme liegt der Puffer im versteckten Unterordner <code>.stillclip-puffer</code> und wird danach automatisch aufgeräumt.</p>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-chip"/></svg></div><div><h2>Videoverarbeitung</h2><p>FFmpeg übernimmt Aufnahme und Zuschnitt auf deinem PC.</p></div></div>
+          <div class="settings-body">
+            <div class="setting-row"><div><div class="connection" id="ffmpeg-state">Wird geprüft …</div><div class="setting-help" id="ffmpeg-path">Wähle bei Bedarf die Datei ffmpeg.exe aus.</div></div><div class="section-buttons"><button class="btn" data-action="choose_ffmpeg">FFmpeg auswählen</button><button class="icon-btn" data-action="rescan" title="Geräte neu einlesen" aria-label="Geräte neu einlesen"><svg><use href="#i-monitor"/></svg></button><button class="icon-btn" data-action="reprobe" title="Encoder erneut prüfen" aria-label="Encoder erneut prüfen"><svg><use href="#i-refresh"/></svg></button></div></div>
+            <div class="encoder-list" id="encoder-list"></div>
+          </div>
+        </div>
+
+        <p class="settings-note"><svg><use href="#i-lock"/></svg><span>Deine Videos bleiben auf deinem Rechner. Stillclip lädt nichts hoch, zeigt keine Werbung und braucht kein Konto.</span></p>
+        <div class="save-bar" id="save-bar" hidden>
+          <span class="save-bar-text">Du hast ungespeicherte Änderungen.</span>
+          <div class="section-buttons"><button class="btn btn-quiet" id="discard-settings">Verwerfen</button><button class="btn btn-primary" id="save-settings"><svg><use href="#i-check"/></svg>Einstellungen speichern</button></div>
+        </div>
+      </section>
+
+      <footer class="footer"><span class="footer-note"><svg><use href="#i-lock"/></svg>Dein Moment bleibt bei dir.</span><span class="status-line" id="app-status" role="status" aria-live="polite">Studio wird geladen …</span></footer>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="editor-backdrop" hidden>
+    <section class="editor" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+      <header class="editor-header">
+        <div class="editor-title"><p class="eyebrow">DEIN CLIP IM FOKUS</p><h2 id="editor-title">Clip bearbeiten</h2><p class="editor-subtitle" id="editor-subtitle"></p></div>
+        <div class="editor-header-actions">
+          <button class="icon-btn" id="editor-reveal" title="Im Explorer anzeigen" aria-label="Im Explorer anzeigen"><svg><use href="#i-folder"/></svg></button>
+          <button class="icon-btn" id="editor-external" title="Mit Standardplayer öffnen" aria-label="Mit Standardplayer öffnen"><svg><use href="#i-external"/></svg></button>
+          <button class="icon-btn danger" id="editor-delete" title="In den Papierkorb" aria-label="Clip löschen"><svg><use href="#i-trash"/></svg></button>
+          <button class="icon-btn" id="close-editor" title="Schließen" aria-label="Editor schließen"><svg><use href="#i-close"/></svg></button>
+        </div>
+      </header>
+      <div class="video-wrap"><video id="editor-video" preload="metadata" playsinline></video></div>
+      <div class="video-error" id="video-error" hidden>Dieses Video kann in der Vorschau nicht wiedergegeben werden. Du kannst es mit deinem Standardplayer öffnen.</div>
+      <div class="editor-body">
+        <div class="timeline" id="timeline">
+          <div class="timeline-track" id="timeline-track">
+            <div class="timeline-range" id="timeline-range"></div>
+            <div class="timeline-playhead" id="timeline-playhead"></div>
+            <button class="timeline-handle start" id="handle-start" aria-label="Startpunkt" title="Startpunkt ziehen"></button>
+            <button class="timeline-handle end" id="handle-end" aria-label="Endpunkt" title="Endpunkt ziehen"></button>
+          </div>
+          <div class="timeline-labels"><span id="label-start">00:00.0</span><span id="label-current">00:00.0</span><span id="label-end">00:00.0</span></div>
+        </div>
+        <div class="transport">
+          <div class="transport-group">
+            <button class="icon-btn" id="step-back" title="Ein Bild zurück (←)"><svg><use href="#i-skip-back"/></svg></button>
+            <button class="icon-btn play" id="play-pause" title="Abspielen / Pause (Leertaste)"><svg id="play-icon"><use href="#i-play"/></svg></button>
+            <button class="icon-btn" id="step-forward" title="Ein Bild vor (→)"><svg><use href="#i-skip-forward"/></svg></button>
+          </div>
+          <div class="transport-group">
+            <button class="btn btn-quiet small" id="set-start" title="Start an die Abspielposition setzen (I)"><svg><use href="#i-marker-in"/></svg>Start hier</button>
+            <button class="btn btn-quiet small" id="set-end" title="Ende an die Abspielposition setzen (O)"><svg><use href="#i-marker-out"/></svg>Ende hier</button>
+            <button class="btn btn-quiet small toggle" id="loop-selection" title="Auswahl in Schleife abspielen (L)"><svg><use href="#i-loop"/></svg>Schleife</button>
+          </div>
+          <div class="transport-times"><span class="field-label">Auswahl</span><strong id="selection-length">0,0 s</strong></div>
+        </div>
+        <div class="editor-grid">
+          <div class="editor-row">
+            <label><span class="field-label">Clip-Name</span><input class="input" id="clip-name" autocomplete="off" maxlength="180"></label>
+            <button class="btn" id="rename-clip">Umbenennen</button>
+          </div>
+          <div class="trim-panel">
+            <div class="trim-heading"><h3><svg><use href="#i-cut"/></svg>Auf den Moment zuschneiden</h3><span class="trim-duration" id="clip-duration"></span></div>
+            <div class="trim-controls">
+              <label><span class="field-label">Start (s)</span><input class="input" id="trim-start" type="number" min="0" step="0.1" value="0"></label>
+              <label><span class="field-label">Ende (s)</span><input class="input" id="trim-end" type="number" min="0.1" step="0.1" placeholder="z. B. 15"></label>
+              <label><span class="field-label">Export</span><select id="trim-mode" aria-label="Exportmodus"><option value="precise">Präzise (neu kodiert)</option><option value="fast">Schnell (ohne Neukodierung)</option></select></label>
+              <button class="btn btn-primary" id="trim-clip"><svg><use href="#i-cut"/></svg>Als neuen Clip speichern</button>
+            </div>
+            <p class="trim-help" id="trim-help">Das Original bleibt erhalten.</p>
+          </div>
+        </div>
+        <div class="status-line editor-status" id="editor-status" role="status" aria-live="polite"></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop confirm-backdrop" id="confirm-backdrop" hidden>
+    <section class="confirm" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Clip löschen?</h2>
+      <p id="confirm-text">Der Clip wird in den Papierkorb verschoben.</p>
+      <div class="confirm-actions"><button class="btn btn-quiet" id="confirm-cancel">Abbrechen</button><button class="btn btn-danger" id="confirm-ok">In den Papierkorb</button></div>
+    </section>
+  </div>
+
+  <div class="context-menu" id="context-menu" hidden role="menu">
+    <button role="menuitem" data-menu="open"><svg><use href="#i-cut"/></svg>Öffnen &amp; zuschneiden</button>
+    <button role="menuitem" data-menu="external"><svg><use href="#i-external"/></svg>Mit Standardplayer öffnen</button>
+    <button role="menuitem" data-menu="reveal"><svg><use href="#i-folder"/></svg>Im Explorer anzeigen</button>
+    <button role="menuitem" class="danger" data-menu="delete"><svg><use href="#i-trash"/></svg>In den Papierkorb</button>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
