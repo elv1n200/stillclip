@@ -1,0 +1,13 @@
+# Build output
+/target/
+
+# Local runtime data created next to the executable
+/clips/
+/settings/
+/tools/*.exe
+/tools/*.dll
+
+# Screenshots from automated checks; only the curated v2-*.png are tracked
+/shots/qa/
+/shots/overlay*.png
+/shots/now.png

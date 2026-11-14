@@ -1,0 +1,241 @@
+{
+  "version": 3,
+  "documentation": "MECHANICS.md",
+  "values": [
+    {
+      "name": "default replay duration",
+      "group": "capture",
+      "value": 30,
+      "unit": "seconds",
+      "estimated": false,
+      "source": "Original main.min.js!bo @0x141318; src/mechanics.rs DEFAULT_REPLAY_SECONDS"
+    },
+    {
+      "name": "custom replay range",
+      "group": "capture",
+      "value": "15–1200",
+      "unit": "seconds",
+      "estimated": false,
+      "source": "Original renderer-CustomGameHotkeyContext.js!ce @0x8BF; src/mechanics.rs replay_seconds"
+    },
+    {
+      "name": "replay presets",
+      "group": "capture",
+      "value": "15, 30, 60, 120, 180, 300",
+      "unit": "seconds",
+      "estimated": false,
+      "source": "Original renderer-CustomGameHotkeyContext.js!_ @0x847; src/mechanics.rs REPLAY_PRESETS"
+    },
+    {
+      "name": "default frame rate",
+      "group": "capture",
+      "value": 60,
+      "unit": "frames/second",
+      "estimated": false,
+      "source": "Original main.min.js!bo @0x141318 overrides recorder fallback 30 via SetupAppSettings RVA 0x9e4e4; src/mechanics.rs DEFAULT_FPS"
+    },
+    {
+      "name": "frame rate choices",
+      "group": "capture",
+      "value": "24, 30, 60, 120, 144",
+      "unit": "frames/second",
+      "estimated": false,
+      "source": "Original renderer-constants.5.js; src/main.rs FPS_CHOICES; minimum 15 and arbitrary saved FPS are local policy"
+    },
+    {
+      "name": "capture display",
+      "group": "capture",
+      "value": "primary display by default, any attached display selectable",
+      "source": "Local choice: src/capture.rs displays (DXGI) and choose_display"
+    },
+    {
+      "name": "capture dimensions",
+      "group": "capture",
+      "value": "height-based aspect scaling to the quality preset, no upscale, truncation and even floor",
+      "estimated": false,
+      "source": "MedalEncoder.exe ScaleResolution RVA 0x4EB0C, GetResolution RVA 0x4EBA0, CalculateOutputResolution RVA 0x2290C; src/encoding.rs capture_size; local two-pixel minimum"
+    },
+    {
+      "name": "quality presets",
+      "group": "capture",
+      "value": "720p 15 Mbit/s (default), 1080p 25, 1440p 40, native",
+      "estimated": false,
+      "source": "Original desktop default 1280×720 at 15 Mbit/s (main.min.js!bo); 1080p/1440p/native and their bitrates are local choices derived from ResolutionHandler..cctor tuples RVA 0x4ec30; src/settings.rs Quality"
+    },
+    {
+      "name": "capture cursor",
+      "group": "capture",
+      "value": false,
+      "estimated": false,
+      "source": "Original main.min.js!bo ShowCursor=false; src/settings.rs show_cursor default, configurable"
+    },
+    {
+      "name": "record system audio",
+      "group": "capture",
+      "value": true,
+      "source": "Local WASAPI loopback of the default render endpoint: src/audio.rs; original records desktop audio through its own engine"
+    },
+    {
+      "name": "record microphone",
+      "group": "capture",
+      "value": false,
+      "estimated": false,
+      "source": "Recorder fallback MicEnabled=false in Settings..cctor RVA 0x28568; src/settings.rs microphone default, configurable"
+    },
+    {
+      "name": "capture target bitrate",
+      "group": "capture",
+      "value": "preset Mbit/s × 1,000,000; multiplied by output/configured pixel-area ratio only above 1",
+      "estimated": false,
+      "source": "MedalEncoder.exe CreateConfig RVA 0x231D0; src/encoding.rs CaptureEncoding::for_output"
+    },
+    {
+      "name": "capture rate control",
+      "group": "capture",
+      "value": "ABR/VBR; max bitrate 2x; VBV 2x; B-frames 0; GOP=floor(fps*4/10)",
+      "estimated": false,
+      "source": "MedalEncoder.exe CreateConfig RVA 0x231D0 and Config.get_AverageBitrateMaxRatio RVA 0x282F8 fallback 2; src/capture.rs encoder_args"
+    },
+    {
+      "name": "video encoder",
+      "group": "capture",
+      "value": "GPU when available (NVENC, AMF, QSV), else libx264; H.264 yuv420p",
+      "estimated": false,
+      "source": "Recorder fallback GPU encoding in Settings..cctor RVA 0x28568; src/capture.rs probe_capabilities and select_encoder"
+    },
+    {
+      "name": "screen capture backend",
+      "group": "capture",
+      "value": "Desktop Duplication (ddagrab) with GDI fallback",
+      "source": "Local choice: src/capture.rs strategies"
+    },
+    {
+      "name": "save replay shortcut",
+      "group": "controls",
+      "value": "F8",
+      "estimated": false,
+      "source": "Original main.min.js!bo clip;length=30 short_press; src/settings.rs hotkey_replay default, configurable with modifiers"
+    },
+    {
+      "name": "record automatically on launch",
+      "group": "capture",
+      "value": false,
+      "source": "Local manual-start policy with optional record_on_launch setting; original RecordingEnabled default differs"
+    },
+    {
+      "name": "replay export length",
+      "group": "capture",
+      "value": "min(available_seconds, requested_seconds), cut at the keyframe at or before the requested start",
+      "estimated": false,
+      "source": "MedalEncoder.exe ClipOutput.SaveClip RVA 0x51A1C; scope.dll exportable_duration 0x180003021; src/recorder.rs save_replay and export_tail"
+    },
+    {
+      "name": "replay buffer",
+      "group": "capture",
+      "value": "bounded ring of 5-second MPEG-TS segments, old segments deleted beyond replay length plus two segments",
+      "source": "Local adaptation of the original memory/disk ring buffers: src/recorder.rs poll and expired_segments"
+    },
+    {
+      "name": "replay continuity",
+      "group": "capture",
+      "value": "continuous; saving a clip never interrupts the recording",
+      "source": "src/recorder.rs save_replay concatenates segments while FFmpeg keeps recording"
+    },
+    {
+      "name": "clip cooldown",
+      "group": "capture",
+      "value": 1,
+      "unit": "seconds",
+      "estimated": false,
+      "source": "Config.get_ClipCooldownSeconds RVA 0x27e04 fallback 1; src/recorder.rs CLIP_COOLDOWN"
+    },
+    {
+      "name": "full session recording",
+      "group": "capture",
+      "value": false,
+      "estimated": false,
+      "source": "Recorder fallback FullSessionMode=false in Settings..cctor RVA 0x28568; src/settings.rs keep_full_session default, configurable"
+    },
+    {
+      "name": "editor minimum selection",
+      "group": "library",
+      "value": 2,
+      "unit": "seconds, or whole source if shorter",
+      "estimated": false,
+      "source": "Original renderer-rulerStep.js!Ot @0x5CBC and fi.#ve @0x72D0; src/mechanics.rs, main.rs trim action and ui/app.js"
+    },
+    {
+      "name": "trim export",
+      "group": "library",
+      "value": "precise re-encode (libx264 CRF 20) or fast stream copy from the previous keyframe; original kept",
+      "source": "Local adaptation: src/recorder.rs trim_clip; original main.min.js!lfe @0x147A37 stream-copies"
+    },
+    {
+      "name": "import behavior",
+      "group": "library",
+      "value": "copy without overwriting existing clips",
+      "source": "Local choice: src/library.rs import_clip"
+    },
+    {
+      "name": "delete behavior",
+      "group": "library",
+      "value": "move to the recycle bin",
+      "source": "Local choice: src/platform.rs recycle (SHFileOperationW FOF_ALLOWUNDO)"
+    },
+    {
+      "name": "automatic recording on game start",
+      "group": "capture",
+      "value": true,
+      "source": "Local feature inspired by the original's game detection: src/games.rs GameWatcher, ~90 built-in executables plus user entries; original uses its own game database, not reproduced"
+    },
+    {
+      "name": "game detection method",
+      "group": "capture",
+      "value": "visible top-level windows mapped to their executable (EnumWindows + QueryFullProcessImageNameW)",
+      "source": "Local choice: src/games.rs visible_apps; no hooking or injection"
+    },
+    {
+      "name": "clip file name",
+      "group": "library",
+      "value": "<Spielname oder Clip> YYYY-MM-DD HH-MM-SS.mp4",
+      "source": "Local choice: src/recorder.rs clip_path and sanitize_prefix"
+    },
+    {
+      "name": "in-game notification",
+      "group": "controls",
+      "value": "click-through banner top right of the recorded display for 2.6 s",
+      "source": "Local adaptation: src/overlay.rs layered window; the original draws an in-process overlay, which is not reproduced"
+    },
+    {
+      "name": "clip confirmation sound",
+      "group": "controls",
+      "value": true,
+      "source": "Local choice: src/overlay.rs generated two-note chime via PlaySoundW"
+    },
+    {
+      "name": "exact clip length",
+      "group": "capture",
+      "value": "optional re-encode of the saved clip to the requested duration",
+      "estimated": false,
+      "source": "Keyframe cut follows ClipOutput.SaveClip RVA 0x51A1C bounds; the optional exact re-encode is a local addition: src/recorder.rs trim_to_exact_length"
+    },
+    {
+      "name": "microphone as separate track",
+      "group": "capture",
+      "value": false,
+      "source": "Local choice: src/capture.rs build_command maps the mixed track plus the microphone input; original mixes into one track"
+    },
+    {
+      "name": "audio device changes",
+      "group": "capture",
+      "value": "follows the default endpoint while recording and reopens a lost device",
+      "source": "Local robustness: src/audio.rs current_default_id and open_stream"
+    },
+    {
+      "name": "cloud uploads, public publishing, advertisements",
+      "group": "privacy",
+      "value": false,
+      "source": "Requested local-only scope: src/main.rs local IPC/media; ui/index.html CSP"
+    }
+  ]
+}
