@@ -1,4 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// The UI state object has grown past serde_json's default macro depth.
+#![recursion_limit = "256"]
 
 mod audio;
 mod capture;
@@ -43,6 +45,7 @@ use wry::{http::Response, WebContext, WebView, WebViewBuilder};
 const HOTKEY_REPLAY: i32 = 1;
 const HOTKEY_RECORD: i32 = 2;
 const HOTKEY_REPLAY_LONG: i32 = 3;
+const HOTKEY_MARKER: i32 = 4;
 /// How often a capture that died on its own is restarted, and within which span.
 const MAX_RESTARTS: usize = 3;
 const RESTART_WINDOW: Duration = Duration::from_secs(300);
@@ -79,6 +82,17 @@ pub struct JobResult {
 }
 
 type MediaFiles = Arc<RwLock<HashMap<String, PathBuf>>>;
+
+/// A moment the user marked while recording. Nothing is written yet: the
+/// marker only remembers where in the running session something happened.
+#[derive(Clone, Debug)]
+struct Marker {
+    id: u64,
+    /// Seconds since this recording started.
+    at: f64,
+    /// Name the clip gets, usually the detected game.
+    prefix: String,
+}
 
 #[derive(Default)]
 struct Notice {
@@ -130,6 +144,12 @@ struct App {
     restarts: Vec<Instant>,
     free_bytes: u64,
     clips_bytes: u64,
+    markers: Vec<Marker>,
+    next_marker: u64,
+    /// Marker whose clip is currently being written; removed once it worked.
+    pending_marker: Option<u64>,
+    /// Seconds of finished video in the buffer, as `(from, to)`.
+    buffered: Option<(f64, f64)>,
 }
 
 impl App {
@@ -197,6 +217,10 @@ impl App {
             restarts: Vec::new(),
             free_bytes,
             clips_bytes: 0,
+            markers: Vec::new(),
+            next_marker: 1,
+            pending_marker: None,
+            buffered: None,
         };
         app.refresh();
         app
@@ -495,6 +519,7 @@ impl App {
             "encoders": encoders,
             "selected_encoder": selected_encoder.label(),
             "session": self.session,
+            "markers": self.marker_json(),
             "buffer_bytes": self.buffer_bytes,
             "free_bytes": self.free_bytes,
             "clips_bytes": self.clips_bytes,
@@ -514,6 +539,7 @@ impl App {
             "hotkeys": {
                 "replay": self.settings.hotkey_replay.label(),
                 "replay_long": self.settings.hotkey_replay_long.label(),
+                "marker": self.settings.hotkey_marker.label(),
                 "record": self.settings.hotkey_record.label(),
                 "failed": self.hotkey_failures,
             },
@@ -522,6 +548,27 @@ impl App {
             "recovered": self.recovered,
         });
         let _ = view.evaluate_script(&format!("window.setState && window.setState({state});"));
+    }
+
+    /// Markers with what the buffer can still deliver for each of them:
+    /// `ready` once the whole window is written, `seconds` how much of the
+    /// wanted window is left before the ring deletes it.
+    fn marker_json(&self) -> Vec<Value> {
+        let before = f64::from(self.settings.marker_before);
+        let after = f64::from(self.settings.marker_after);
+        self.markers
+            .iter()
+            .map(|marker| {
+                let (ready, available) = marker_state(marker.at, before, after, self.buffered);
+                json!({
+                    "id": marker.id,
+                    "at": marker.at.round() as u64,
+                    "ready": ready,
+                    "seconds": available.round() as u64,
+                    "wanted": (before + after).round() as u64,
+                })
+            })
+            .collect()
     }
 
     fn clip_path(&self, command: &Value) -> Result<PathBuf, String> {
@@ -645,6 +692,80 @@ impl App {
         });
     }
 
+    /// Remembers the current moment so its clip can be saved later. Costs
+    /// nothing while playing: no file is written and the recording runs on.
+    fn mark(&mut self) {
+        let Some(recorder) = self.recorder.as_ref() else {
+            self.message(Err("Bitte zuerst FFmpeg in den Einstellungen auswählen.".into()));
+            return;
+        };
+        if !recorder.is_recording() {
+            self.notify("Es läuft keine Aufnahme. Starte zuerst die Aufnahme.", true, None);
+            return;
+        }
+        let at = recorder.elapsed().as_secs_f64();
+        let id = self.next_marker;
+        self.next_marker += 1;
+        self.markers.push(Marker {
+            id,
+            at,
+            prefix: self.clip_prefix(),
+        });
+        let after = self.settings.marker_after;
+        let text = if after > 0 {
+            format!("Markierung gesetzt. In {after} Sekunden ist der Moment vollständig.")
+        } else {
+            "Markierung gesetzt.".into()
+        };
+        self.banner("Markierung gesetzt", false);
+        self.notify(&text, false, None);
+        self.status = text;
+        self.error = false;
+    }
+
+    /// Writes the clip around a marked moment.
+    fn marker_job(&mut self, id: u64, proxy: EventLoopProxy<AppEvent>) {
+        let Some(marker) = self.markers.iter().find(|m| m.id == id).cloned() else {
+            self.message(Err("Die Markierung gibt es nicht mehr.".into()));
+            return;
+        };
+        let Some(mut recorder) = self.recorder.take() else {
+            self.message(Err("Bitte zuerst FFmpeg in den Einstellungen auswählen.".into()));
+            return;
+        };
+        self.busy = true;
+        self.error = false;
+        self.status = "Markierter Moment wird gesichert…".into();
+        self.pending_marker = Some(id);
+        let before = f64::from(self.settings.marker_before);
+        let after = f64::from(self.settings.marker_after);
+        std::thread::spawn(move || {
+            let result = recorder
+                .save_marker(marker.at, before, after, &marker.prefix)
+                .map(|path| JobOutcome {
+                    message: format!(
+                        "Der markierte Moment ist gesichert ({} Sekunden).",
+                        (before + after).round()
+                    ),
+                    saved: Some(path),
+                    session: None,
+                    replay: true,
+                });
+            let result = match (result, recorder.take_warning()) {
+                (Ok(mut outcome), Some(warning)) => {
+                    outcome.message = format!("{} {warning}", outcome.message);
+                    Ok(outcome)
+                }
+                (other, _) => other,
+            };
+            let _ = proxy.send_event(AppEvent::Finished(JobResult {
+                recorder: Some(recorder),
+                restore_recorder: true,
+                result,
+            }));
+        });
+    }
+
     /// Reacts to something the recorder reported by itself: a capture that died
     /// is started again a few times, a nearly full drive ends the recording.
     fn handle_issue(&mut self, issue: recorder::PollIssue, proxy: EventLoopProxy<AppEvent>) {
@@ -709,6 +830,9 @@ impl App {
                 ));
             }
         }
+        if let Some(key) = self.settings.hotkey_marker.virtual_key() {
+            bindings.push((HOTKEY_MARKER, self.settings.hotkey_marker.modifiers(), key));
+        }
         if let Some(key) = self.settings.hotkey_record.virtual_key() {
             bindings.push((HOTKEY_RECORD, self.settings.hotkey_record.modifiers(), key));
         }
@@ -763,6 +887,7 @@ impl App {
                 let hotkeys_changed = settings.hotkey_replay != self.settings.hotkey_replay
                     || settings.hotkey_replay_long != self.settings.hotkey_replay_long
                     || settings.replay_seconds_long != self.settings.replay_seconds_long
+                    || settings.hotkey_marker != self.settings.hotkey_marker
                     || settings.hotkey_record != self.settings.hotkey_record;
                 let folder_changed = settings.clips_dir != self.settings.clips_dir;
                 let limit_changed = settings.storage_limit_gb != self.settings.storage_limit_gb;
@@ -786,7 +911,10 @@ impl App {
             return;
         }
         if self.busy {
-            if matches!(action, "start" | "stop" | "toggle" | "replay" | "replay_long") {
+            if matches!(
+                action,
+                "start" | "stop" | "toggle" | "replay" | "replay_long" | "save_marker"
+            ) {
                 self.message(Err("Einen Moment, der letzte Vorgang läuft noch.".into()));
             }
             return;
@@ -800,6 +928,18 @@ impl App {
                 self.refresh();
             }
             "start" | "stop" | "replay" | "replay_long" => self.recording_job(action, proxy),
+            "mark" => self.mark(),
+            "save_marker" => {
+                if let Some(id) = command["id"].as_u64() {
+                    self.marker_job(id, proxy);
+                }
+            }
+            "drop_marker" => {
+                if let Some(id) = command["id"].as_u64() {
+                    self.markers.retain(|marker| marker.id != id);
+                    self.message(Ok("Markierung verworfen.".into()));
+                }
+            }
             "toggle" => {
                 let next = if self.recording { "stop" } else { "start" };
                 self.recording_job(next, proxy);
@@ -1020,8 +1160,18 @@ impl App {
         self.recording = self.recorder.as_ref().is_some_and(Recorder::is_recording);
         self.session = self.recorder.as_ref().and_then(|r| r.info().cloned());
         self.elapsed = self.recorder.as_ref().map(|r| r.elapsed().as_secs()).unwrap_or(0);
+        let marked = self.pending_marker.take();
+        // Markers belong to one session: once it ends, the buffer behind them
+        // is gone, so they go with it.
+        if !self.recording {
+            self.markers.clear();
+            self.buffered = None;
+        }
         match result.result {
             Ok(outcome) => {
+                if let Some(id) = marked {
+                    self.markers.retain(|marker| marker.id != id);
+                }
                 let has_warnings = outcome
                     .session
                     .as_ref()
@@ -1096,6 +1246,18 @@ impl App {
             tray.update(self.recording, &tooltip);
         }
     }
+}
+
+/// What the buffer can still deliver for a marked moment: whether its whole
+/// window has been written, and how many seconds of the wanted window are
+/// left. `buffered` is the finished part of the recording, `(from, to)`.
+fn marker_state(at: f64, before: f64, after: f64, buffered: Option<(f64, f64)>) -> (bool, f64) {
+    let Some((from, to)) = buffered else {
+        return (false, 0.0);
+    };
+    let ready = at + after <= to + 0.001;
+    let available = ((at + after).min(to) - (at - before).max(from)).max(0.0);
+    (ready, available)
 }
 
 fn unique_trim_path(dir: &Path, stem: &str) -> PathBuf {
@@ -1297,6 +1459,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     HOTKEY_REPLAY_LONG if app.recording && !app.busy => {
                         app.recording_job("replay_long", proxy.clone());
                     }
+                    HOTKEY_MARKER if !app.busy => app.mark(),
                     HOTKEY_REPLAY | HOTKEY_REPLAY_LONG if !app.recording && !app.busy => {
                         app.notify("Es läuft keine Aufnahme. Starte zuerst die Aufnahme.", true, None);
                     }
@@ -1316,6 +1479,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .map(|id| match *id {
                             HOTKEY_REPLAY => app.settings.hotkey_replay.label(),
                             HOTKEY_REPLAY_LONG => app.settings.hotkey_replay_long.label(),
+                            HOTKEY_MARKER => app.settings.hotkey_marker.label(),
                             _ => app.settings.hotkey_record.label(),
                         })
                         .collect();
@@ -1469,12 +1633,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let elapsed = recorder.elapsed().as_secs();
                     let recording = recorder.is_recording();
                     let buffer_bytes = if recording { recorder.buffer_bytes() } else { 0 };
+                    // Only interesting while markers wait for their clip.
+                    let buffered = if recording && !app.markers.is_empty() {
+                        recorder.buffered_span()
+                    } else {
+                        None
+                    };
                     let changed = elapsed != app.elapsed
                         || recording != app.recording
                         || issue.is_some()
-                        || buffer_bytes != app.buffer_bytes;
+                        || buffer_bytes != app.buffer_bytes
+                        || buffered != app.buffered;
                     app.elapsed = elapsed;
                     app.buffer_bytes = buffer_bytes;
+                    app.buffered = buffered;
                     if recording != app.recording {
                         app.recording = recording;
                         app.session = recorder.info().cloned();
@@ -1522,5 +1694,34 @@ fn main() {
                 0x10,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marked_moments_report_what_the_buffer_still_holds() {
+        // Nothing finished yet: the moment is not ready and nothing is there.
+        assert_eq!(marker_state(3.0, 20.0, 10.0, None), (false, 0.0));
+        // Marked three seconds ago, ten seconds of tail wanted: still running.
+        let (ready, available) = marker_state(100.0, 20.0, 10.0, Some((40.0, 103.0)));
+        assert!(!ready);
+        assert_eq!(available, 23.0);
+        // The whole window is written: ready, and the full thirty seconds.
+        let (ready, available) = marker_state(100.0, 20.0, 10.0, Some((40.0, 115.0)));
+        assert!(ready);
+        assert_eq!(available, 30.0);
+        // The ring has eaten into the lead: ready, but shorter than wanted.
+        let (ready, available) = marker_state(100.0, 20.0, 10.0, Some((95.0, 150.0)));
+        assert!(ready);
+        assert_eq!(available, 15.0);
+        // Long gone: nothing left to cut.
+        let (ready, available) = marker_state(100.0, 20.0, 10.0, Some((200.0, 260.0)));
+        assert!(ready);
+        assert_eq!(available, 0.0);
+        // A tail of zero seconds is ready as soon as the mark itself is written.
+        assert_eq!(marker_state(50.0, 15.0, 0.0, Some((0.0, 50.0))), (true, 15.0));
     }
 }

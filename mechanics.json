@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "documentation": "MECHANICS.md",
   "values": [
     {
@@ -266,6 +266,18 @@
       "group": "capture",
       "value": "up to three restarts in five minutes; skipped while full session mode keeps the segments",
       "source": "Local robustness: src/recorder.rs PollIssue and src/main.rs handle_issue"
+    },
+    {
+      "name": "marked moments",
+      "group": "capture",
+      "value": "a shortcut remembers the spot; the clip is cut later with a configurable lead and tail (20 s / 10 s by default)",
+      "source": "Local addition: src/main.rs Marker and marker_job, src/recorder.rs save_marker and export_span"
+    },
+    {
+      "name": "marked moment availability",
+      "group": "capture",
+      "value": "savable while the whole window sits in finished segments; the ring keeps lead plus tail as well",
+      "source": "Local policy: src/recorder.rs buffered_span, src/settings.rs buffer_seconds"
     }
   ]
 }
