@@ -271,3 +271,9 @@ extra-duration padding is still documented but not applied.
   therefore counts `before + after` alongside the two clip lengths.
 - **Lifetime.** Markers belong to the session that produced them and are
   dropped when it ends, because the segments behind them are gone.
+- **Marks inside a finished clip.** Every export reports where the clip begins
+  on the session timeline, including the seconds an exact-length re-encode
+  dropped from its front. Marks falling into that span are stored with the clip
+  in the media index as offsets from its start, so the editor can draw them and
+  jump between them. They are kept when the clip is re-indexed or renamed, and
+  a clip cut from another clip starts without them.

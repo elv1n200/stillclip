@@ -165,6 +165,14 @@ struct Session {
     ticks: u32,
 }
 
+/// A clip that was just written, plus where it begins on the session timeline.
+/// The offset turns marked moments into positions inside the finished clip.
+#[derive(Debug)]
+pub struct SavedClip {
+    pub path: PathBuf,
+    pub start: f64,
+}
+
 /// Something that happened on its own while recording and that the app has to
 /// react to. Returned by [`Recorder::poll`].
 pub struct PollIssue {
@@ -609,7 +617,7 @@ impl Recorder {
     /// Saves the last `seconds` of the running recording as a new clip.
     /// The recording keeps running; nothing is re-encoded unless precise clips
     /// are enabled. `prefix` names the file, e.g. the detected game.
-    pub fn save_replay(&mut self, seconds: u32, prefix: &str) -> Result<PathBuf, String> {
+    pub fn save_replay(&mut self, seconds: u32, prefix: &str) -> Result<SavedClip, String> {
         if seconds == 0 {
             return Err("Die Cliplänge muss mindestens eine Sekunde betragen.".into());
         }
@@ -642,17 +650,18 @@ impl Recorder {
             gop,
             &output,
         )
-        .and_then(|()| {
+        .and_then(|start| {
             if session.precise {
                 trim_to_exact_length(&self.ffmpeg, &output, f64::from(seconds), session.encoder, &session.rates)
+                    .map(|dropped| start + dropped)
             } else {
-                Ok(())
+                Ok(start)
             }
         });
         match export {
-            Ok(()) => {
+            Ok(start) => {
                 session.last_clip = Some(Instant::now());
-                Ok(output)
+                Ok(SavedClip { path: output, start })
             }
             Err(error) => {
                 let _ = fs::remove_file(&output);
@@ -685,7 +694,7 @@ impl Recorder {
         before: f64,
         after: f64,
         prefix: &str,
-    ) -> Result<PathBuf, String> {
+    ) -> Result<SavedClip, String> {
         let session = self.session.as_mut().ok_or("Starte zuerst eine Aufnahme.")?;
         if session
             .last_clip
@@ -722,17 +731,18 @@ impl Recorder {
             gop,
             &output,
         )
-        .and_then(|()| {
+        .and_then(|start| {
             if session.precise {
                 trim_to_exact_length(&self.ffmpeg, &output, to - from, session.encoder, &session.rates)
+                    .map(|dropped| start + dropped)
             } else {
-                Ok(())
+                Ok(start)
             }
         });
         match export {
-            Ok(()) => {
+            Ok(start) => {
                 session.last_clip = Some(Instant::now());
-                Ok(output)
+                Ok(SavedClip { path: output, start })
             }
             Err(error) => {
                 let _ = fs::remove_file(&output);
@@ -905,6 +915,8 @@ pub fn span_segments(segments: &[Segment], from: f64, to: f64) -> Vec<Segment> {
 /// Both bounds are seconds on the CSV timeline. The cut moves back to the
 /// keyframe at or before `from`, so the clip may start a little earlier but
 /// never ends early.
+/// Returns where the finished clip begins on that timeline, which is at or
+/// shortly before `from`.
 fn export_span(
     ffmpeg: &Path,
     ffprobe: Option<&Path>,
@@ -913,7 +925,7 @@ fn export_span(
     to: f64,
     gop: f64,
     output: &Path,
-) -> Result<(), String> {
+) -> Result<f64, String> {
     let first = segments.first().ok_or("Keine Segmente zum Sichern vorhanden.")?;
     let dir = first.path.parent().ok_or("Der Pufferordner fehlt.")?;
     if to <= from {
@@ -982,9 +994,10 @@ fn export_span(
     if fs::metadata(output).map_or(true, |metadata| metadata.len() == 0) {
         return Err("Der Clip enthält keine Videodaten.".into());
     }
-    Ok(())
+    Ok(base + cut)
 }
 
+/// Returns where the finished clip begins on the CSV timeline.
 fn export_tail(
     ffmpeg: &Path,
     ffprobe: Option<&Path>,
@@ -992,7 +1005,7 @@ fn export_tail(
     seconds: f64,
     gop: f64,
     output: &Path,
-) -> Result<(), String> {
+) -> Result<f64, String> {
     let first = segments.first().ok_or("Keine Segmente zum Sichern vorhanden.")?;
     let last = segments.last().ok_or("Keine Segmente zum Sichern vorhanden.")?;
     let dir = first.path.parent().ok_or("Der Pufferordner fehlt.")?;
@@ -1074,7 +1087,7 @@ fn export_tail(
     if fs::metadata(output).map_or(true, |metadata| metadata.len() == 0) {
         return Err("Der Clip enthält keine Videodaten.".into());
     }
-    Ok(())
+    Ok(first.start.unwrap_or(0.0) + seek.unwrap_or(0.0))
 }
 
 fn finish_process(child: &mut Child, timeout: Duration) -> Result<std::process::ExitStatus, String> {
@@ -1139,17 +1152,18 @@ pub fn sanitize_prefix(prefix: &str) -> String {
 }
 
 /// Re-encodes the tail of `path` in place so the clip lasts exactly `seconds`.
+/// Returns the seconds that were dropped from the front.
 fn trim_to_exact_length(
     ffmpeg: &Path,
     path: &Path,
     seconds: f64,
     encoder: Encoder,
     rates: &crate::encoding::CaptureEncoding,
-) -> Result<(), String> {
+) -> Result<f64, String> {
     let duration = probe_duration(ffmpeg, path)?;
     let excess = duration - seconds;
     if excess < 0.04 {
-        return Ok(());
+        return Ok(0.0);
     }
     let temporary = path.with_extension("exact.mp4");
     let mut encode = command(ffmpeg);
@@ -1172,10 +1186,12 @@ fn trim_to_exact_length(
             diagnostic(&result.stderr)
         ));
     }
-    fs::rename(&temporary, path).map_err(|error| {
-        let _ = fs::remove_file(&temporary);
-        format!("Der exakte Clip konnte nicht gespeichert werden: {error}")
-    })
+    fs::rename(&temporary, path)
+        .map(|()| excess)
+        .map_err(|error| {
+            let _ = fs::remove_file(&temporary);
+            format!("Der exakte Clip konnte nicht gespeichert werden: {error}")
+        })
 }
 
 /// `Clip 2026-11-14 02-21-33.mp4`, with a counter when the name is taken.
@@ -1740,9 +1756,9 @@ capabilities {capabilities:?}");
         thread::sleep(Duration::from_secs(7));
         assert!(recorder.poll().is_none());
         let clip = recorder.save_replay(4, "Testspiel: Runde?").unwrap();
-        let clip_info = probe_media(&ffmpeg, &clip).unwrap();
+        let clip_info = probe_media(&ffmpeg, &clip.path).unwrap();
         eprintln!("clip {clip:?} {clip_info:?}");
-        assert!(clip.file_name().unwrap().to_string_lossy().starts_with("Testspiel Runde 20"));
+        assert!(clip.path.file_name().unwrap().to_string_lossy().starts_with("Testspiel Runde 20"));
         assert!(clip_info.audio, "replay must carry system audio");
         assert!((3.9..=4.15).contains(&clip_info.duration), "precise replay length {}", clip_info.duration);
         assert_eq!((clip_info.width, clip_info.height), (1280, 720));
@@ -1916,7 +1932,9 @@ capabilities {capabilities:?}");
         eprintln!("buffered {from:.1}..{to:.1}");
         assert!(from < 1.0 && to > 15.0, "{from} {to}");
         let clip = recorder.save_marker(12.0, 6.0, 4.0, "Markierung").unwrap();
-        let info = probe_media(&ffmpeg, &clip).unwrap();
+        // The clip starts at the keyframe at or shortly before the wanted spot.
+        assert!((5.6..=6.05).contains(&clip.start), "clip starts at {}", clip.start);
+        let info = probe_media(&ffmpeg, &clip.path).unwrap();
         eprintln!("clip {clip:?} {info:?}");
         assert!(info.audio, "a marked moment keeps the sound");
         assert_eq!((info.width, info.height), (1280, 720));

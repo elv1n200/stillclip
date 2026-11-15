@@ -64,6 +64,8 @@ pub enum AppEvent {
     /// A watched game appeared, together with the display its window sits on.
     GameStarted(GameEntry, String),
     GameStopped(GameEntry),
+    /// A saved clip and the marked moments inside it, in seconds from its start.
+    ClipMarkers(PathBuf, Vec<f64>),
     ScreenshotFinished(Result<(), String>),
 }
 
@@ -148,6 +150,8 @@ struct App {
     next_marker: u64,
     /// Marker whose clip is currently being written; removed once it worked.
     pending_marker: Option<u64>,
+    /// Index key of a clip being renamed, so its markers follow the new name.
+    pending_rename: Option<String>,
     /// Seconds of finished video in the buffer, as `(from, to)`.
     buffered: Option<(f64, f64)>,
 }
@@ -220,6 +224,7 @@ impl App {
             markers: Vec::new(),
             next_marker: 1,
             pending_marker: None,
+            pending_rename: None,
             buffered: None,
         };
         app.refresh();
@@ -429,6 +434,8 @@ impl App {
                             info,
                             thumbnail: has_thumbnail.then_some(thumbnail),
                             failed: false,
+                            // Filled in by the event loop, which knows them.
+                            markers: Vec::new(),
                         }
                     }
                     Err(_) => IndexEntry {
@@ -437,6 +444,7 @@ impl App {
                         info: Default::default(),
                         thumbnail: None,
                         failed: true,
+                        markers: Vec::new(),
                     },
                 };
                 if proxy.send_event(AppEvent::Indexed(key, entry)).is_err() {
@@ -461,6 +469,13 @@ impl App {
             "width": entry.map(|e| e.info.width),
             "height": entry.map(|e| e.info.height),
             "audio": entry.map(|e| e.info.audio),
+            // Marked moments are kept by path, so they show before the clip is indexed.
+            "markers": self
+                .index
+                .entries
+                .get(&library::index_key(&clip.path))
+                .map(|e| e.markers.clone())
+                .unwrap_or_default(),
             "pending": entry.is_none(),
             "path": clip.path,
         })
@@ -644,6 +659,8 @@ impl App {
         };
         let prefix = self.clip_prefix();
         let game = self.active_game.as_ref().map(|g| g.name.clone());
+        let marks: Vec<f64> = self.markers.iter().map(|marker| marker.at).collect();
+        let elapsed = self.elapsed as f64;
         std::thread::spawn(move || {
             let result = match action.as_str() {
                 "start" => recorder.start(config).map(|info| JobOutcome {
@@ -661,20 +678,30 @@ impl App {
                     session: Some(info),
                     replay: false,
                 }),
-                "stop" => recorder.stop().map(|saved| JobOutcome {
-                    message: match &saved {
-                        Some(_) => "Aufnahme beendet und als Video gespeichert.".into(),
-                        None => "Aufnahme beendet.".into(),
-                    },
-                    saved,
-                    session: None,
-                    replay: false,
+                "stop" => recorder.stop().map(|saved| {
+                    // The session video starts where the recording did, so the
+                    // marks keep their own times.
+                    if let Some(path) = &saved {
+                        send_markers(&proxy, path, &marks, 0.0, elapsed + 5.0);
+                    }
+                    JobOutcome {
+                        message: match &saved {
+                            Some(_) => "Aufnahme beendet und als Video gespeichert.".into(),
+                            None => "Aufnahme beendet.".into(),
+                        },
+                        saved,
+                        session: None,
+                        replay: false,
+                    }
                 }),
-                _ => recorder.save_replay(replay_seconds, &prefix).map(|path| JobOutcome {
-                    message: format!("Die letzten {replay_seconds} Sekunden sind gesichert."),
-                    saved: Some(path),
-                    session: None,
-                    replay: true,
+                _ => recorder.save_replay(replay_seconds, &prefix).map(|saved| {
+                    send_markers(&proxy, &saved.path, &marks, saved.start, f64::from(replay_seconds));
+                    JobOutcome {
+                        message: format!("Die letzten {replay_seconds} Sekunden sind gesichert."),
+                        saved: Some(saved.path),
+                        session: None,
+                        replay: true,
+                    }
                 }),
             };
             let result = match (result, recorder.take_warning()) {
@@ -723,6 +750,17 @@ impl App {
         self.error = false;
     }
 
+    /// Keeps the marked moments of a finished clip with that clip, so they are
+    /// still there after a restart.
+    fn remember_markers(&mut self, path: &Path, offsets: Vec<f64>) {
+        if offsets.is_empty() {
+            return;
+        }
+        let entry = self.index.entries.entry(library::index_key(path)).or_default();
+        entry.markers = offsets;
+        self.index.save(&self.config);
+    }
+
     /// Writes the clip around a marked moment.
     fn marker_job(&mut self, id: u64, proxy: EventLoopProxy<AppEvent>) {
         let Some(marker) = self.markers.iter().find(|m| m.id == id).cloned() else {
@@ -739,17 +777,21 @@ impl App {
         self.pending_marker = Some(id);
         let before = f64::from(self.settings.marker_before);
         let after = f64::from(self.settings.marker_after);
+        let marks: Vec<f64> = self.markers.iter().map(|marker| marker.at).collect();
         std::thread::spawn(move || {
             let result = recorder
                 .save_marker(marker.at, before, after, &marker.prefix)
-                .map(|path| JobOutcome {
-                    message: format!(
-                        "Der markierte Moment ist gesichert ({} Sekunden).",
-                        (before + after).round()
-                    ),
-                    saved: Some(path),
-                    session: None,
-                    replay: true,
+                .map(|saved| {
+                    send_markers(&proxy, &saved.path, &marks, saved.start, before + after);
+                    JobOutcome {
+                        message: format!(
+                            "Der markierte Moment ist gesichert ({} Sekunden).",
+                            (before + after).round()
+                        ),
+                        saved: Some(saved.path),
+                        session: None,
+                        replay: true,
+                    }
                 });
             let result = match (result, recorder.take_warning()) {
                 (Ok(mut outcome), Some(warning)) => {
@@ -1046,14 +1088,18 @@ impl App {
                 let path = self.clip_path(&command);
                 let name = command["name"].as_str().unwrap_or("").to_owned();
                 match path {
-                    Ok(path) => self.file_job(proxy, "Clip wird umbenannt…", move || {
-                        library::rename_clip(&path, &name).map(|path| JobOutcome {
-                            message: "Clip umbenannt.".into(),
-                            saved: Some(path),
-                            session: None,
-                            replay: false,
-                        })
-                    }),
+                    Ok(path) => {
+                        // So the marked moments follow the clip to its new name.
+                        self.pending_rename = Some(library::index_key(&path));
+                        self.file_job(proxy, "Clip wird umbenannt…", move || {
+                            library::rename_clip(&path, &name).map(|path| JobOutcome {
+                                message: "Clip umbenannt.".into(),
+                                saved: Some(path),
+                                session: None,
+                                replay: false,
+                            })
+                        });
+                    }
                     Err(error) => self.message(Err(error)),
                 }
             }
@@ -1161,6 +1207,7 @@ impl App {
         self.session = self.recorder.as_ref().and_then(|r| r.info().cloned());
         self.elapsed = self.recorder.as_ref().map(|r| r.elapsed().as_secs()).unwrap_or(0);
         let marked = self.pending_marker.take();
+        let renamed = self.pending_rename.take();
         // Markers belong to one session: once it ends, the buffer behind them
         // is gone, so they go with it.
         if !self.recording {
@@ -1171,6 +1218,16 @@ impl App {
             Ok(outcome) => {
                 if let Some(id) = marked {
                     self.markers.retain(|marker| marker.id != id);
+                }
+                // A renamed clip keeps its marked moments under the new name.
+                if let (Some(old), Some(path)) = (renamed, outcome.saved.as_ref()) {
+                    let moved = self
+                        .index
+                        .entries
+                        .get(&old)
+                        .map(|entry| entry.markers.clone())
+                        .unwrap_or_default();
+                    self.remember_markers(path, moved);
                 }
                 let has_warnings = outcome
                     .session
@@ -1245,6 +1302,32 @@ impl App {
             };
             tray.update(self.recording, &tooltip);
         }
+    }
+}
+
+/// Marked moments that fall inside a saved clip, as seconds from its start.
+fn marker_offsets(marks: &[f64], start: f64, length: f64) -> Vec<f64> {
+    let mut offsets: Vec<f64> = marks
+        .iter()
+        .filter(|at| **at >= start - 0.05 && **at <= start + length + 0.05)
+        .map(|at| (at - start).clamp(0.0, length))
+        .collect();
+    offsets.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    offsets
+}
+
+/// Hands the marked moments of a finished clip to the event loop, which keeps
+/// them with the clip so the editor can show them.
+fn send_markers(
+    proxy: &EventLoopProxy<AppEvent>,
+    path: &Path,
+    marks: &[f64],
+    start: f64,
+    length: f64,
+) {
+    let offsets = marker_offsets(marks, start, length);
+    if !offsets.is_empty() {
+        let _ = proxy.send_event(AppEvent::ClipMarkers(path.to_path_buf(), offsets));
     }
 }
 
@@ -1526,7 +1609,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 app.sync(&view);
             }
-            Event::UserEvent(AppEvent::Indexed(key, entry)) => {
+            Event::UserEvent(AppEvent::ClipMarkers(path, offsets)) => {
+                app.remember_markers(&path, offsets);
+                app.sync(&view);
+            }
+            Event::UserEvent(AppEvent::Indexed(key, mut entry)) => {
+                // Probing knows nothing about marked moments; keep the ones we have.
+                if let Some(known) = app.index.entries.get(&key) {
+                    entry.markers = known.markers.clone();
+                }
                 app.index.entries.insert(key, entry);
                 app.update_media_map();
                 app.sync(&view);
@@ -1700,6 +1791,24 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn marked_moments_become_positions_inside_the_saved_clip() {
+        let round = |values: Vec<f64>| -> Vec<f64> {
+            values.iter().map(|v| (v * 1000.0).round() / 1000.0).collect()
+        };
+        // A thirty second replay saved at session time 100..130.
+        let marks = [40.0, 101.5, 112.0, 129.9, 200.0];
+        assert_eq!(round(marker_offsets(&marks, 100.0, 30.0)), [1.5, 12.0, 29.9]);
+        // Nothing inside the window: no marks for this clip.
+        assert!(marker_offsets(&marks, 150.0, 30.0).is_empty());
+        // The keyframe cut starts the clip a moment early; the mark moves with it.
+        assert_eq!(round(marker_offsets(&[20.0], 19.6, 30.0)), [0.4]);
+        // A mark right on either edge still counts and stays in range.
+        assert_eq!(round(marker_offsets(&[100.0, 130.0], 100.0, 30.0)), [0.0, 30.0]);
+        // The clip around a marked moment has it exactly after the lead.
+        assert_eq!(round(marker_offsets(&[60.0], 40.0, 30.0)), [20.0]);
+    }
 
     #[test]
     fn marked_moments_report_what_the_buffer_still_holds() {

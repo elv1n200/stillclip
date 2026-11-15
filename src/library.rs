@@ -216,6 +216,9 @@ pub struct IndexEntry {
     pub thumbnail: Option<String>,
     /// Probing failed; do not retry until the file changes.
     pub failed: bool,
+    /// Moments marked while recording, in seconds from the clip's start.
+    #[serde(default)]
+    pub markers: Vec<f64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -421,12 +424,15 @@ mod tests {
                 },
                 thumbnail: Some(thumbnail.clone()),
                 failed: false,
+                markers: vec![1.5],
             },
         );
         assert!(!index.needs_work(clip));
         index.save(&directory.0);
         let loaded = Index::load(&directory.0);
         assert_eq!(loaded.current(clip).unwrap().info.duration, 3.5);
+        // Marked moments survive a round trip through the saved index.
+        assert_eq!(loaded.current(clip).unwrap().markers, vec![1.5]);
         fs::write(&path, b"changed video").unwrap();
         let changed = scan_clips(&directory.0).unwrap();
         assert!(index.needs_work(&changed[0]));
