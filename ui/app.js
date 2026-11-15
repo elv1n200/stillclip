@@ -204,6 +204,13 @@
       info.append(document.createTextNode(`${clip.height}p`));
       thumbnail.append(info);
     }
+    const marks = Array.isArray(clip.markers) ? clip.markers.length : 0;
+    if (marks) {
+      const badge = el('span', 'badge marks');
+      badge.append(icon('bookmark'), document.createTextNode(String(marks)));
+      badge.title = marks === 1 ? 'Ein markierter Moment' : `${marks} markierte Momente`;
+      thumbnail.append(badge);
+    }
     const play = el('span', 'play-circle');
     play.append(icon('play'));
     thumbnail.append(play);
@@ -745,6 +752,7 @@
   // ---------------------------------------------------------------- editor
   const video = $('editor-video');
   let selected = null;
+  let clipMarks = [];
   let duration = 0;
   let sel = { start: 0, end: 0 };
   let loop = false;
@@ -759,6 +767,7 @@
     expectReopen = false;
     previousFocus = document.activeElement;
     selected = { id: clip.id, src: clip.src, name: clip.name, path: clip.path };
+    clipMarks = (clip.markers || []).filter(Number.isFinite).sort((a, b) => a - b);
     duration = Number(clip.duration) || 0;
     sel = { start: 0, end: duration };
     loop = false;
@@ -771,6 +780,7 @@
     video.src = clip.src;
     $('editor-backdrop').hidden = false;
     document.body.style.overflow = 'hidden';
+    renderMarks();
     renderEditor();
     renderState();
     $('play-pause').focus();
@@ -794,6 +804,45 @@
     if (seek !== null && Number.isFinite(seek)) video.currentTime = clamp(seek, 0, duration);
     renderEditor();
   }
+  // Marked moments sit on the timeline as little flags. Drawn when the clip
+  // or its length changes, never in the playback loop.
+  function renderMarks() {
+    const box = $('timeline-marks');
+    const total = duration || 0;
+    const marks = total ? clipMarks.filter(at => at >= 0 && at <= total + 0.05) : [];
+    box.replaceChildren(...marks.map(at => {
+      const mark = el('button', 'timeline-mark');
+      mark.style.left = (clamp(at, 0, total) / total) * 100 + '%';
+      mark.title = `Markierter Moment bei ${precise(at)}`;
+      mark.setAttribute('aria-label', mark.title);
+      mark.addEventListener('click', event => {
+        event.stopPropagation();
+        video.currentTime = clamp(at, 0, total);
+        renderEditor();
+      });
+      return mark;
+    }));
+    const count = $('marker-count');
+    count.hidden = !marks.length;
+    count.title = 'Mit M zur nächsten Markierung springen, mit Umschalt + M zurück.';
+    count.replaceChildren(
+      icon('bookmark'),
+      el('span', '', marks.length === 1 ? 'ein markierter Moment' : `${marks.length} markierte Momente`),
+    );
+  }
+
+  // M jumps to the next marked moment, Shift+M to the previous one.
+  function jumpToMark(direction) {
+    if (!clipMarks.length) return;
+    const now = video.currentTime || 0;
+    const target = direction > 0
+      ? clipMarks.find(at => at > now + 0.05)
+      : [...clipMarks].reverse().find(at => at < now - 0.05);
+    if (target === undefined) return;
+    video.currentTime = clamp(target, 0, duration || target);
+    renderEditor();
+  }
+
   function renderEditor() {
     const total = duration || Math.max(sel.end, video.duration || 0) || 1;
     const pct = value => (clamp(value, 0, total) / total * 100) + '%';
@@ -897,6 +946,7 @@
     $('trim-end').min = String(Math.min(state.editor_min_seconds, duration));
     $('trim-end').max = String(duration);
     setSelection(sel.start, sel.end);
+    renderMarks();
   });
   video.addEventListener('error', () => { if (selected) $('video-error').hidden = false; });
 
@@ -947,6 +997,7 @@
       case 'i': case 'I': event.preventDefault(); $('set-start').click(); break;
       case 'o': case 'O': event.preventDefault(); $('set-end').click(); break;
       case 'l': case 'L': event.preventDefault(); $('loop-selection').click(); break;
+      case 'm': case 'M': event.preventDefault(); jumpToMark(event.shiftKey ? -1 : 1); break;
       case 'Delete': event.preventDefault(); $('editor-delete').click(); break;
     }
   });

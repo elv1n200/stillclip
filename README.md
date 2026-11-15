@@ -39,7 +39,10 @@ vorhandene `ffmpeg.exe`.
   Aufnahme zu stören und ohne eine Datei zu schreiben. Später, in der Pause
   oder nach der Runde, wird daraus mit einem Klick ein Clip – mit frei
   wählbarem Vorlauf und Nachlauf. Stillclip zeigt zu jeder Markierung, ob der
-  Moment noch vollständig im Puffer liegt.
+  Moment noch vollständig im Puffer liegt. Im fertigen Clip bleiben die
+  Markierungen sichtbar: In der Bibliothek trägt er ein kleines Fähnchen mit
+  ihrer Anzahl, im Editor stehen sie auf der Zeitleiste und ein Klick darauf
+  springt hin (oder **M** für die nächste, **Umschalt + M** für die vorherige).
 - **Ton.** Systemton (WASAPI-Loopback des Standard-Wiedergabegeräts) und
   wahlweise ein Mikrofon werden in den Clip gemischt, jeweils mit eigener
   Lautstärke von 0 bis 200 Prozent. Wechselt das Wiedergabegerät mitten in der
@@ -64,9 +67,10 @@ vorhandene `ffmpeg.exe`.
   Windows (Run-Eintrag des Benutzerkontos).
 - **Bibliothek.** Vorschaubilder, Länge, Auflösung, Tonanzeige, Suche und
   Sortierung; Kontextmenü mit Öffnen, Standardplayer, Explorer und Papierkorb.
-- **Editor.** Zeitleiste mit ziehbaren Start-/Endmarken, Abspielposition,
-  Bildschritte, Schleife der Auswahl, Tastatur (Leertaste, I/O, Pfeiltasten,
-  L, Entf). Export präzise (neu kodiert) oder schnell (ohne Neukodierung).
+- **Editor.** Zeitleiste mit ziehbaren Start-/Endmarken, markierten Momenten,
+  Abspielposition, Bildschritte, Schleife der Auswahl, Tastatur (Leertaste,
+  I/O, Pfeiltasten, L, M, Entf). Export präzise (neu kodiert) oder schnell
+  (ohne Neukodierung).
 - **Ganze Sitzung behalten.** Optional wird beim Beenden zusätzlich die
   komplette Aufnahme als Video gespeichert. Nach einem Absturz werden
   übrig gebliebene Segmente einer solchen Sitzung beim nächsten Start
@@ -130,6 +134,9 @@ Tastenkürzel und Verhalten wirken sofort.
   Startet ein erkanntes Spiel auf einem anderen Monitor, wechselt Stillclip
   dorthin, aber erst beim Start der Aufnahme – ein Fensterwechsel während einer
   laufenden Aufnahme ändert den Bildschirm nicht.
+- Markierungen im fertigen Clip merkt sich Stillclip im Medienindex neben der
+  Clipdatei, nicht in der Datei selbst. Beim Umbenennen wandern sie mit; wer
+  den Clip außerhalb von Stillclip verschiebt oder zuschneidet, verliert sie.
 - Markierungen gehören zu einer Aufnahme: Endet sie, verschwindet der Puffer
   und mit ihm die noch nicht gesicherten Markierungen. Eine Markierung lässt
   sich außerdem nur sichern, solange ihr Fenster im Rückblick liegt – die

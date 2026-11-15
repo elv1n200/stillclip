@@ -278,6 +278,12 @@
       "group": "capture",
       "value": "savable while the whole window sits in finished segments; the ring keeps lead plus tail as well",
       "source": "Local policy: src/recorder.rs buffered_span, src/settings.rs buffer_seconds"
+    },
+    {
+      "name": "marks inside a saved clip",
+      "group": "library",
+      "value": "positions of marked moments are kept with the clip in the media index and shown on the editor timeline",
+      "source": "Local addition: src/main.rs marker_offsets and remember_markers, src/library.rs IndexEntry::markers, ui/app.js renderMarks"
     }
   ]
 }
