@@ -194,7 +194,7 @@ impl App {
             busy: false,
             recording: false,
             elapsed: 0,
-            status: "Bereit für deinen nächsten Moment.".into(),
+            status: String::new(),
             error: false,
             closing: false,
             capabilities,
