@@ -43,6 +43,8 @@ vorhandene `ffmpeg.exe`.
   Markierungen sichtbar: In der Bibliothek trägt er ein kleines Fähnchen mit
   ihrer Anzahl, im Editor stehen sie auf der Zeitleiste und ein Klick darauf
   springt hin (oder **M** für die nächste, **Umschalt + M** für die vorherige).
+  Schneidest du den Clip zu, nimmt der neue Clip die Markierungen mit, die im
+  Ausschnitt liegen.
 - **Ton.** Systemton (WASAPI-Loopback des Standard-Wiedergabegeräts) und
   wahlweise ein Mikrofon werden in den Clip gemischt, jeweils mit eigener
   Lautstärke von 0 bis 200 Prozent. Wechselt das Wiedergabegerät mitten in der
@@ -135,8 +137,9 @@ Tastenkürzel und Verhalten wirken sofort.
   dorthin, aber erst beim Start der Aufnahme – ein Fensterwechsel während einer
   laufenden Aufnahme ändert den Bildschirm nicht.
 - Markierungen im fertigen Clip merkt sich Stillclip im Medienindex neben der
-  Clipdatei, nicht in der Datei selbst. Beim Umbenennen wandern sie mit; wer
-  den Clip außerhalb von Stillclip verschiebt oder zuschneidet, verliert sie.
+  Clipdatei, nicht in der Datei selbst. Beim Umbenennen und beim Zuschneiden
+  wandern sie mit; wer den Clip außerhalb von Stillclip verschiebt oder
+  schneidet, verliert sie.
 - Markierungen gehören zu einer Aufnahme: Endet sie, verschwindet der Puffer
   und mit ihm die noch nicht gesicherten Markierungen. Eine Markierung lässt
   sich außerdem nur sichern, solange ihr Fenster im Rückblick liegt – die

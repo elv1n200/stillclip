@@ -282,8 +282,8 @@
     {
       "name": "marks inside a saved clip",
       "group": "library",
-      "value": "positions of marked moments are kept with the clip in the media index and shown on the editor timeline",
-      "source": "Local addition: src/main.rs marker_offsets and remember_markers, src/library.rs IndexEntry::markers, ui/app.js renderMarks"
+      "value": "positions of marked moments are kept with the clip in the media index, shown on the editor timeline, and carried over when the clip is renamed or trimmed",
+      "source": "Local addition: src/main.rs marker_offsets and remember_markers, src/recorder.rs trim_clip start reporting, src/library.rs IndexEntry::markers, ui/app.js renderMarks"
     }
   ]
 }
