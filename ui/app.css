@@ -244,6 +244,15 @@ select:focus { border-color: #73638d; }
 .input:focus { border-color: #8b73b3; }
 .input-short { width: 130px; }
 .hotkey-wrap { display: flex; gap: 6px; align-items: center; }
+.unit-wrap { display: inline-flex; gap: 8px; align-items: center; }
+.unit { font-size: 11px; color: #7e7b8d; white-space: nowrap; }
+.volume-wrap { display: inline-flex; gap: 10px; align-items: center; }
+.volume-value { font-size: 11px; color: #a7a0b5; width: 42px; text-align: right; font-variant-numeric: tabular-nums; }
+.volume-wrap input[type="range"] { width: 150px; height: 4px; appearance: none; background: #2d2e38; border-radius: 3px; }
+.volume-wrap input[type="range"]::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 0; cursor: pointer; }
+.volume-wrap input[type="range"]:disabled::-webkit-slider-thumb { background: #6a6878; cursor: default; }
+.storage-state { font-size: 11px; color: #a7a0b5; line-height: 1.8; border: 1px solid #33323d; background: #14151a; border-radius: 8px; padding: 11px 13px; margin-bottom: 16px; }
+.storage-state.warn { color: #e8cba0; border-color: #5a4a30; }
 .hotkey { width: 200px; text-align: center; font-family: "Cascadia Mono", Consolas, monospace; letter-spacing: .5px; cursor: pointer; }
 .hotkey.capturing { border-color: var(--accent); background: #1c1826; color: var(--accent); }
 .switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }

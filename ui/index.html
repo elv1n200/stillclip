@@ -87,8 +87,9 @@
             <div class="record-actions">
               <button class="btn btn-primary" id="record-button" disabled><span class="record-icon"></span><span id="record-button-text">Aufnahme starten</span></button>
               <button class="btn btn-quiet" id="replay-button" title="Moment sichern" disabled><svg><use href="#i-replay"/></svg><span id="replay-button-text">Letzte 30 Sek. sichern</span></button>
+              <button class="btn btn-quiet" id="replay-long-button" title="Längeren Moment sichern" hidden disabled><svg><use href="#i-replay"/></svg><span id="replay-long-button-text">Letzte 120 Sek. sichern</span></button>
             </div>
-            <div class="shortcut-hint" id="shortcut-hint">Moment sichern mit <kbd id="hotkey-replay-label">F8</kbd><span id="hotkey-record-hint" hidden> · Aufnahme starten/beenden mit <kbd id="hotkey-record-label"></kbd></span></div>
+            <div class="shortcut-hint" id="shortcut-hint">Moment sichern mit <kbd id="hotkey-replay-label">F8</kbd><span id="hotkey-replay-long-hint" hidden> · <span id="hotkey-replay-long-seconds"></span> Sek. mit <kbd id="hotkey-replay-long-label"></kbd></span><span id="hotkey-record-hint" hidden> · Aufnahme starten/beenden mit <kbd id="hotkey-record-label"></kbd></span></div>
             <div class="capture-meta" id="capture-meta"></div>
             <div class="session-warnings" id="session-warnings" hidden></div>
           </div>
@@ -156,7 +157,8 @@
         <div class="settings-card">
           <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-monitor"/></svg></div><div><h2>Aufnahme</h2><p>Welcher Bildschirm, wie scharf, wie flüssig.</p></div></div>
           <div class="settings-body">
-            <div class="setting-row"><div><div class="setting-label">Bildschirm</div><div class="setting-help">Dieser Bildschirm wird aufgenommen.</div></div><select id="setting-display" aria-label="Bildschirm"></select></div>
+            <div class="setting-row"><div><div class="setting-label">Bildschirm</div><div class="setting-help" id="display-help">Dieser Bildschirm wird aufgenommen.</div></div><select id="setting-display" aria-label="Bildschirm"></select></div>
+            <div class="setting-row"><div><div class="setting-label">Bildschirm des Spiels verwenden</div><div class="setting-help">Läuft ein erkanntes Spiel auf einem anderen Monitor, nimmt Stillclip diesen auf statt den oben gewählten.</div></div><label class="switch"><input type="checkbox" id="setting-follow-display"><span class="slider"></span></label></div>
             <div class="setting-row"><div><div class="setting-label">Qualität</div><div class="setting-help" id="quality-help">Höhere Auflösung bedeutet größere Dateien.</div></div><select id="setting-quality" aria-label="Qualität"><option value="p720">720p · 15 Mbit/s (Standard)</option><option value="p1080">1080p · 25 Mbit/s</option><option value="p1440">1440p · 40 Mbit/s</option><option value="native">Nativ · volle Bildschirmauflösung</option></select></div>
             <div class="setting-row"><div><div class="setting-label">Bildrate</div><div class="setting-help">Mehr Bilder pro Sekunde benötigen mehr Leistung.</div></div><select id="setting-fps" aria-label="Bildrate"></select></div>
             <div class="setting-row"><div><div class="setting-label">Encoder</div><div class="setting-help" id="encoder-help">Automatisch nutzt die Grafikkarte, wenn möglich.</div></div><select id="setting-encoder" aria-label="Encoder"><option value="auto">Automatisch</option></select></div>
@@ -168,8 +170,10 @@
           <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-sound"/></svg></div><div><h2>Ton</h2><p>Spielsound und Stimme landen gemischt im Clip.</p></div></div>
           <div class="settings-body">
             <div class="setting-row"><div><div class="setting-label">Systemton aufnehmen</div><div class="setting-help" id="system-audio-help">Alles, was über dein Standard-Wiedergabegerät läuft.</div></div><label class="switch"><input type="checkbox" id="setting-system-audio"><span class="slider"></span></label></div>
+            <div class="setting-row" id="system-volume-row"><div><label class="setting-label" for="setting-system-volume">Lautstärke Systemton</label><div class="setting-help" id="system-volume-help">100 % lässt den Ton unverändert.</div></div><div class="volume-wrap"><input id="setting-system-volume" type="range" min="0" max="200" step="5" value="100" aria-label="Lautstärke Systemton"><span class="volume-value" id="system-volume-value">100 %</span></div></div>
             <div class="setting-row"><div><div class="setting-label">Mikrofon aufnehmen</div><div class="setting-help">Deine Stimme wird in den Clip gemischt.</div></div><label class="switch"><input type="checkbox" id="setting-microphone"><span class="slider"></span></label></div>
             <div class="setting-row" id="microphone-device-row"><div><div class="setting-label">Mikrofon</div><div class="setting-help">Welches Gerät verwendet wird.</div></div><select id="setting-microphone-device" aria-label="Mikrofon"></select></div>
+            <div class="setting-row" id="microphone-volume-row"><div><label class="setting-label" for="setting-microphone-volume">Lautstärke Mikrofon</label><div class="setting-help">Zu leise im Clip? Hier lauter stellen, ohne Windows anzufassen.</div></div><div class="volume-wrap"><input id="setting-microphone-volume" type="range" min="0" max="200" step="5" value="100" aria-label="Lautstärke Mikrofon"><span class="volume-value" id="microphone-volume-value">100 %</span></div></div>
             <div class="setting-row" id="microphone-separate-row"><div><div class="setting-label">Mikrofon zusätzlich als eigene Tonspur</div><div class="setting-help">Spur 1 bleibt der Mix, Spur 2 enthält nur deine Stimme – praktisch zum Nachbearbeiten.</div></div><label class="switch"><input type="checkbox" id="setting-mic-separate"><span class="slider"></span></label></div>
           </div>
         </div>
@@ -179,6 +183,7 @@
           <div class="settings-body">
             <div class="setting-row"><div><div class="setting-label">Länge deiner Moment-Clips</div><div class="setting-help">So viele Sekunden werden beim Sichern behalten.</div></div><select id="setting-replay" aria-label="Länge der Moment-Clips"></select></div>
             <div class="setting-row" id="setting-replay-custom-row" hidden><div><label class="setting-label" for="setting-replay-custom">Eigene Länge in Sekunden</label><div class="setting-help" id="setting-replay-help">15 bis 1200 Sekunden (20 Minuten).</div></div><input class="input input-short" id="setting-replay-custom" type="number" min="15" max="1200" step="1" value="30" required aria-describedby="setting-replay-help"></div>
+            <div class="setting-row"><div><label class="setting-label" for="setting-replay-long">Zweite Länge für längere Momente</label><div class="setting-help" id="setting-replay-long-help">Optional: eine zweite Taste sichert diese Länge, zum Beispiel eine ganze Runde. 0 schaltet sie aus. Der Puffer belegt dann so viel Platz wie die längere Länge.</div></div><input class="input input-short" id="setting-replay-long" type="number" min="0" max="1200" step="1" value="0" aria-describedby="setting-replay-long-help"></div>
             <div class="setting-row"><div><div class="setting-label">Clips exakt zuschneiden</div><div class="setting-help">Normalerweise beginnt ein Clip am vorherigen Keyframe und ist bis zu 0,4 s länger. Exakt kodiert den Clip nach dem Sichern noch einmal auf die Sekunde genau – dauert bei GPU-Encodern nur einen Moment.</div></div><label class="switch"><input type="checkbox" id="setting-precise"><span class="slider"></span></label></div>
             <div class="setting-row"><div><div class="setting-label">Ganze Sitzung behalten</div><div class="setting-help">Beim Beenden wird zusätzlich die komplette Aufnahme als Video gespeichert. Braucht viel Speicherplatz.</div></div><label class="switch"><input type="checkbox" id="setting-full-session"><span class="slider"></span></label></div>
           </div>
@@ -188,6 +193,7 @@
           <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-keyboard"/></svg></div><div><h2>Tastenkürzel</h2><p>Funktionieren überall, auch im Spiel.</p></div></div>
           <div class="settings-body">
             <div class="setting-row"><div><div class="setting-label">Moment sichern</div><div class="setting-help">Klicke ins Feld und drücke die gewünschte Taste. Rücktaste entfernt das Kürzel.</div></div><div class="hotkey-wrap"><input class="input hotkey" id="hotkey-replay" readonly value="F8" aria-label="Tastenkürzel Moment sichern"><button class="icon-btn" id="hotkey-replay-clear" title="Kürzel entfernen"><svg><use href="#i-close"/></svg></button></div></div>
+            <div class="setting-row" id="hotkey-replay-long-row"><div><div class="setting-label">Längeren Moment sichern</div><div class="setting-help" id="hotkey-replay-long-help">Sichert die zweite Länge aus dem Bereich Rückblick.</div></div><div class="hotkey-wrap"><input class="input hotkey" id="hotkey-replay-long" readonly value="" placeholder="Nicht belegt" aria-label="Tastenkürzel längeren Moment sichern"><button class="icon-btn" id="hotkey-replay-long-clear" title="Kürzel entfernen"><svg><use href="#i-close"/></svg></button></div></div>
             <div class="setting-row"><div><div class="setting-label">Aufnahme starten / beenden</div><div class="setting-help">Optional. Schaltet die Aufnahme um, ohne das Fenster zu öffnen.</div></div><div class="hotkey-wrap"><input class="input hotkey" id="hotkey-record" readonly value="" placeholder="Nicht belegt" aria-label="Tastenkürzel Aufnahme umschalten"><button class="icon-btn" id="hotkey-record-clear" title="Kürzel entfernen"><svg><use href="#i-close"/></svg></button></div></div>
             <p class="setting-note" id="hotkey-failures" hidden></p>
           </div>
@@ -215,6 +221,15 @@
               <button class="btn btn-quiet" data-action="open_folder">Ordner öffnen<svg><use href="#i-arrow"/></svg></button>
             </div>
             <p class="setting-note">Während einer Aufnahme liegt der Puffer im versteckten Unterordner <code>.stillclip-puffer</code> und wird danach automatisch aufgeräumt.</p>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-film"/></svg></div><div><h2>Speicherplatz</h2><p>Damit eine vergessene Aufnahme nie die Festplatte füllt.</p></div></div>
+          <div class="settings-body">
+            <div class="storage-state" id="storage-state">Wird geladen …</div>
+            <div class="setting-row"><div><label class="setting-label" for="setting-min-free">Aufnahme beenden bei weniger als</label><div class="setting-help">Stillclip prüft den freien Platz während der Aufnahme und beendet sie rechtzeitig. 0 schaltet die Prüfung aus.</div></div><div class="unit-wrap"><input class="input input-short" id="setting-min-free" type="number" min="0" max="1024" step="1" value="5" aria-label="Freier Platz in Gigabyte"><span class="unit">GB frei</span></div></div>
+            <div class="setting-row"><div><label class="setting-label" for="setting-storage-limit">Älteste Clips löschen über</label><div class="setting-help">Aus, solange hier 0 steht. Sonst löscht Stillclip die ältesten Clips endgültig, sobald der Ordner größer wird – der neueste Clip bleibt immer.</div></div><div class="unit-wrap"><input class="input input-short" id="setting-storage-limit" type="number" min="0" max="100000" step="1" value="0" aria-label="Maximale Ordnergröße in Gigabyte"><span class="unit">GB</span></div></div>
           </div>
         </div>
 

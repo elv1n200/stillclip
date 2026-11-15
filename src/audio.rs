@@ -54,7 +54,7 @@ pub struct AudioPipe {
 impl AudioPipe {
     /// Opens the device and the pipe. Returns once the device is initialized so
     /// FFmpeg is only started for inputs that actually work.
-    pub fn start(source: AudioSource) -> Result<AudioPipe, String> {
+    pub fn start(source: AudioSource, gain: f32) -> Result<AudioPipe, String> {
         let sequence = PIPE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = format!("\\\\.\\pipe\\stillclip-{}-{sequence}", std::process::id());
         let stop = Arc::new(AtomicBool::new(false));
@@ -74,6 +74,7 @@ impl AudioPipe {
                 sample_format: "f32le",
                 rate: SAMPLE_RATE,
                 channels: CHANNELS,
+                gain,
             },
             source,
             stop,

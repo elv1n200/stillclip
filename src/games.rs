@@ -208,6 +208,9 @@ pub struct RunningApp {
     pub pid: u32,
     pub exe: String,
     pub title: String,
+    /// Display device name the window sits on, such as `\\.\DISPLAY2`.
+    #[serde(default)]
+    pub monitor: String,
 }
 
 const IGNORED_EXES: &[&str] = &[
@@ -227,6 +230,31 @@ const IGNORED_EXES: &[&str] = &[
     "taskmgr.exe",
     "dwm.exe",
 ];
+
+/// Device name of the display a window sits on, empty when it cannot be told.
+#[cfg(windows)]
+fn window_monitor(hwnd: windows_sys::Win32::Foundation::HWND) -> String {
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+    };
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if monitor.is_null() {
+            return String::new();
+        }
+        let mut info: MONITORINFOEXW = std::mem::zeroed();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if GetMonitorInfoW(monitor, std::ptr::addr_of_mut!(info).cast::<MONITORINFO>()) == 0 {
+            return String::new();
+        }
+        let end = info
+            .szDevice
+            .iter()
+            .position(|character| *character == 0)
+            .unwrap_or(info.szDevice.len());
+        String::from_utf16_lossy(&info.szDevice[..end])
+    }
+}
 
 #[cfg(windows)]
 pub fn visible_apps() -> Vec<RunningApp> {
@@ -277,7 +305,13 @@ pub fn visible_apps() -> Vec<RunningApp> {
                 return 1;
             }
             if !apps.iter().any(|a| a.pid == pid && a.title == title) {
-                apps.push(RunningApp { pid, exe, title });
+                let monitor = window_monitor(hwnd);
+                apps.push(RunningApp {
+                    pid,
+                    exe,
+                    title,
+                    monitor,
+                });
             }
         }
         1
@@ -329,12 +363,15 @@ impl GameWatcher {
                         match &active {
                             None => {
                                 let found = apps.iter().find_map(|app| {
-                                    watched.iter().find(|g| g.matches(app)).map(|g| (g.clone(), app.pid))
+                                    watched
+                                        .iter()
+                                        .find(|g| g.matches(app))
+                                        .map(|g| (g.clone(), app.pid, app.monitor.clone()))
                                 });
-                                if let Some((entry, pid)) = found {
+                                if let Some((entry, pid, monitor)) = found {
                                     active = Some((entry.clone(), pid));
                                     missing = 0;
-                                    let _ = proxy.send_event(AppEvent::GameStarted(entry, pid));
+                                    let _ = proxy.send_event(AppEvent::GameStarted(entry, monitor));
                                 }
                             }
                             Some((entry, pid)) => {
@@ -403,18 +440,21 @@ mod tests {
             pid: 7,
             exe: "cs2.exe".into(),
             title: "Counter-Strike 2".into(),
+            monitor: "\\\\.\\DISPLAY1".into(),
         };
         assert!(entry.matches(&app));
         let minecraft = builtin_games().into_iter().find(|g| g.exe == "javaw.exe").unwrap();
         assert!(minecraft.matches(&RunningApp {
             pid: 1,
             exe: "javaw.exe".into(),
-            title: "Minecraft 1.21".into()
+            title: "Minecraft 1.21".into(),
+            monitor: String::new(),
         }));
         assert!(!minecraft.matches(&RunningApp {
             pid: 1,
             exe: "javaw.exe".into(),
-            title: "IntelliJ".into()
+            title: "IntelliJ".into(),
+            monitor: String::new(),
         }));
         let unnamed = GameEntry {
             exe: "Game-Win64-Shipping".into(),

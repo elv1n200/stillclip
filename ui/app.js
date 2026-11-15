@@ -5,9 +5,12 @@
   // ---------------------------------------------------------------- state
   const defaultSettings = {
     clips_dir: '', replay_seconds: 30, fps: 60, quality: 'p720', encoder: 'auto', display: '',
-    show_cursor: false, system_audio: true, microphone: false, microphone_device: '',
-    keep_full_session: false,
+    show_cursor: false, follow_game_display: true,
+    system_audio: true, microphone: false, microphone_device: '',
+    system_volume: 100, microphone_volume: 100,
+    replay_seconds_long: 0, keep_full_session: false, min_free_gb: 5, storage_limit_gb: 0,
     hotkey_replay: { ctrl: false, alt: false, shift: false, win: false, key: 'F8' },
+    hotkey_replay_long: { ctrl: false, alt: false, shift: false, win: false, key: '' },
     hotkey_record: { ctrl: false, alt: false, shift: false, win: false, key: '' },
     close_to_tray: true, record_on_launch: false, start_minimized: false,
     microphone_separate_track: false, precise_clips: false, clip_sound: true, overlay_notifications: true,
@@ -18,11 +21,14 @@
     ffmpeg_available: false, ffmpeg_path: null, clips_dir: '', settings: { ...defaultSettings }, autostart: false,
     displays: [], microphones: [], default_output: null,
     capabilities: { probed: false, ddagrab: false, encoders: [] }, encoders: [], selected_encoder: '',
-    session: null, buffer_bytes: 0, notice: { sequence: 0, text: '', error: false, clip: null },
+    session: null, buffer_bytes: 0, free_bytes: 0, clips_bytes: 0, max_volume: 200,
+    notice: { sequence: 0, text: '', error: false, clip: null },
     replay_presets: [15, 30, 60, 120, 180, 300], replay_min: 15, replay_max: 1200,
     editor_min_seconds: 2, editor_tolerance: 0.000001, fps_choices: [24, 30, 60, 120, 144],
-    hotkeys: { replay: 'F8', record: 'Nicht belegt', failed: [] }, tray: false, version: '', recovered: null,
-    active_game: null, auto_started: false, apps: [], builtin_games: [],
+    hotkeys: { replay: 'F8', replay_long: 'Nicht belegt', record: 'Nicht belegt', failed: [] },
+    tray: false, version: '', recovered: null,
+    active_game: null, active_game_display: null, capture_display: null,
+    auto_started: false, apps: [], builtin_games: [],
   };
   let loaded = false;
   let clipSignature = '';
@@ -118,6 +124,17 @@
     let w = Math.floor(display.width * ratio), h = Math.floor(display.height * ratio);
     if (display.width <= w && display.height <= h) { w = display.width; h = display.height; }
     return [Math.max(2, w & ~1), Math.max(2, h & ~1)];
+  };
+
+  // Rough size of the segment buffer, the same formula the recorder uses:
+  // the preset rate grows with the pixel area, but never shrinks.
+  const bufferEstimate = (settings, seconds) => {
+    const preset = { p720: [1280, 720, 15], p1080: [1920, 1080, 25], p1440: [2560, 1440, 40], native: [1920, 1080, 25] }[settings.quality]
+      || [1280, 720, 15];
+    const output = outputSize(displayFor(state.capture_display || settings.display), settings.quality);
+    const ratio = output ? (output[0] * output[1]) / (preset[0] * preset[1]) : 1;
+    const mbps = preset[2] * Math.max(1, ratio);
+    return (seconds * mbps * 1e6) / 8;
   };
 
   // ------------------------------------------------------------ navigation
@@ -302,10 +319,22 @@
     $('record-button-text').textContent = recording ? 'Aufnahme beenden' : 'Aufnahme starten';
     $('record-button').disabled = unavailable || (!recording && !state.ffmpeg_available);
     $('replay-button').disabled = unavailable || !recording || !state.ffmpeg_available;
-    $('replay-button-text').textContent = recording ? `Letzte ${settings.replay_seconds} Sek. sichern` : `Letzte ${settings.replay_seconds} Sek. sichern`;
+    $('replay-button-text').textContent = `Letzte ${settings.replay_seconds} Sek. sichern`;
+    const long = Number(settings.replay_seconds_long) || 0;
+    $('replay-long-button').hidden = long <= 0;
+    $('replay-long-button').disabled = unavailable || !recording || !state.ffmpeg_available;
+    $('replay-long-button-text').textContent = long >= 120
+      ? `Letzte ${Math.round(long / 60)} Min. sichern`
+      : `Letzte ${long} Sek. sichern`;
     $('timer').textContent = clock(state.elapsed);
     $('hotkey-replay-label').textContent = replayLabel;
-    $('shortcut-hint').hidden = !settings.hotkey_replay.key && !settings.hotkey_record.key;
+    const longKey = long > 0 && settings.hotkey_replay_long && settings.hotkey_replay_long.key;
+    $('shortcut-hint').hidden = !settings.hotkey_replay.key && !settings.hotkey_record.key && !longKey;
+    $('hotkey-replay-long-hint').hidden = !longKey;
+    if (longKey) {
+      $('hotkey-replay-long-seconds').textContent = String(long);
+      $('hotkey-replay-long-label').textContent = hotkeyLabel(settings.hotkey_replay_long);
+    }
     $('hotkey-record-hint').hidden = !settings.hotkey_record.key;
     $('hotkey-record-label').textContent = hotkeyLabel(settings.hotkey_record);
 
@@ -316,7 +345,7 @@
       if (iconName) meta.append(icon(iconName));
       meta.append(el('span', '', text));
     };
-    const display = displayFor(settings.display);
+    const display = displayFor(state.capture_display || settings.display);
     if (recording && state.session) {
       add('monitor', `${display ? display.label.split(' · ')[0] : 'Bildschirm'} → ${state.session.width}×${state.session.height}`);
       add(state.session.audio.length ? 'sound' : 'sound-off', state.session.audio.length ? state.session.audio.join(' + ') : 'Ohne Ton');
@@ -401,10 +430,28 @@
       ? (settings.encoder === 'auto' ? `Automatisch nutzt derzeit ${state.selected_encoder}.` : 'Fester Encoder. Fällt bei Problemen auf die CPU zurück.')
       : 'Die verfügbaren Encoder werden gerade geprüft …';
     $('setting-cursor').checked = !!settings.show_cursor;
+    $('setting-follow-display').checked = !!settings.follow_game_display;
+    const gameDisplay = settings.follow_game_display ? displayFor(state.active_game_display) : null;
+    $('display-help').textContent = gameDisplay && state.active_game
+      ? `${state.active_game.name} läuft auf ${gameDisplay.label.split(' · ')[0]} – dieser wird gerade aufgenommen.`
+      : 'Dieser Bildschirm wird aufgenommen.';
     $('setting-system-audio').checked = !!settings.system_audio;
     $('system-audio-help').textContent = state.default_output
       ? `Alles, was über „${state.default_output}“ läuft.`
       : 'Alles, was über dein Standard-Wiedergabegerät läuft.';
+    $('system-volume-row').hidden = !settings.system_audio;
+    $('setting-system-volume').max = String(state.max_volume);
+    $('setting-system-volume').value = String(settings.system_volume);
+    $('system-volume-value').textContent = `${settings.system_volume} %`;
+    $('system-volume-help').textContent = settings.system_volume === 100
+      ? '100 % lässt den Ton unverändert.'
+      : (settings.system_volume > 100
+        ? 'Über 100 % kann bei lauten Stellen übersteuern.'
+        : (settings.system_volume === 0 ? 'Stumm: der Spielsound fehlt im Clip.' : 'Leiser als im Spiel.'));
+    $('microphone-volume-row').hidden = !settings.microphone;
+    $('setting-microphone-volume').max = String(state.max_volume);
+    $('setting-microphone-volume').value = String(settings.microphone_volume);
+    $('microphone-volume-value').textContent = `${settings.microphone_volume} %`;
     $('setting-microphone').checked = !!settings.microphone;
     $('microphone-device-row').hidden = !settings.microphone;
     $('microphone-separate-row').hidden = !settings.microphone;
@@ -432,8 +479,20 @@
     $('setting-replay-custom').max = String(state.replay_max);
     $('setting-replay-help').textContent = `${state.replay_min} bis ${state.replay_max} Sekunden (${state.replay_max / 60} Minuten).`;
     $('setting-full-session').checked = !!settings.keep_full_session;
+    if (document.activeElement !== $('setting-replay-long')) $('setting-replay-long').value = String(settings.replay_seconds_long);
+    const longSeconds = Number(settings.replay_seconds_long) || 0;
+    $('setting-replay-long-help').textContent = longSeconds > 0
+      ? `Eine zweite Taste sichert ${longSeconds} Sekunden. Der Puffer belegt so viel Platz wie diese Länge – etwa ${size(bufferEstimate(settings, longSeconds))}.`
+      : `Optional: eine zweite Taste sichert eine längere Spanne, zum Beispiel eine ganze Runde. 0 schaltet sie aus. Erlaubt sind ${state.replay_min} bis ${state.replay_max} Sekunden.`;
 
+    const longInvalid = longSeconds !== 0 && (longSeconds < state.replay_min || longSeconds > state.replay_max);
+    $('setting-replay-long').setCustomValidity(longInvalid ? `Bitte 0 oder ${state.replay_min} bis ${state.replay_max} Sekunden.` : '');
+    $('hotkey-replay-long-row').hidden = longSeconds <= 0;
+    $('hotkey-replay-long-help').textContent = longSeconds > 0
+      ? `Sichert ${longSeconds} Sekunden. Ohne Kürzel bleibt der Knopf im Fenster.`
+      : 'Sichert die zweite Länge aus dem Bereich Rückblick.';
     if (capturing !== 'replay') $('hotkey-replay').value = settings.hotkey_replay.key ? hotkeyLabel(settings.hotkey_replay) : '';
+    if (capturing !== 'replay_long') $('hotkey-replay-long').value = settings.hotkey_replay_long.key ? hotkeyLabel(settings.hotkey_replay_long) : '';
     if (capturing !== 'record') $('hotkey-record').value = settings.hotkey_record.key ? hotkeyLabel(settings.hotkey_record) : '';
     const failed = state.hotkeys.failed || [];
     $('hotkey-failures').hidden = !failed.length;
@@ -445,11 +504,12 @@
     $('setting-start-minimized').checked = !!settings.start_minimized;
     $('setting-autostart').checked = !!autostart;
 
-    ['setting-display', 'setting-quality', 'setting-fps', 'setting-encoder', 'setting-cursor', 'setting-system-audio', 'setting-microphone', 'setting-microphone-device', 'setting-mic-separate', 'setting-full-session']
+    ['setting-display', 'setting-quality', 'setting-fps', 'setting-encoder', 'setting-cursor', 'setting-system-audio', 'setting-microphone', 'setting-microphone-device', 'setting-mic-separate', 'setting-full-session', 'setting-system-volume', 'setting-microphone-volume']
       .forEach(id => { $(id).disabled = recordingLocked; });
-    ['setting-replay', 'setting-replay-custom', 'hotkey-replay', 'hotkey-record', 'setting-close-to-tray', 'setting-record-on-launch', 'setting-start-minimized', 'setting-autostart', 'setting-precise', 'setting-overlay', 'setting-clip-sound', 'setting-auto-games', 'setting-builtin-games', 'app-picker', 'add-running-app', 'refresh-apps', 'pick-game']
+    ['setting-replay', 'setting-replay-custom', 'hotkey-replay', 'hotkey-replay-long', 'hotkey-record', 'setting-close-to-tray', 'setting-record-on-launch', 'setting-start-minimized', 'setting-autostart', 'setting-precise', 'setting-overlay', 'setting-clip-sound', 'setting-auto-games', 'setting-builtin-games', 'app-picker', 'add-running-app', 'refresh-apps', 'pick-game', 'setting-follow-display', 'setting-replay-long', 'setting-min-free', 'setting-storage-limit']
       .forEach(id => { $(id).disabled = locked; });
 
+    renderStorage(settings);
     $('clips-directory').textContent = state.clips_dir || 'Wird geladen …';
     $('ffmpeg-state').textContent = loaded ? (state.ffmpeg_available ? 'FFmpeg ist bereit' : 'FFmpeg noch nicht gefunden') : 'Wird geprüft …';
     $('ffmpeg-state').classList.toggle('unavailable', loaded && !state.ffmpeg_available);
@@ -466,6 +526,26 @@
     const dirty = settingsDirty();
     $('save-bar').hidden = !dirty;
     $('save-settings').disabled = locked || !validReplay(settings);
+  }
+  function renderStorage(settings) {
+    if (document.activeElement !== $('setting-min-free')) $('setting-min-free').value = String(settings.min_free_gb);
+    if (document.activeElement !== $('setting-storage-limit')) $('setting-storage-limit').value = String(settings.storage_limit_gb);
+    const box = $('storage-state');
+    if (!loaded) { box.textContent = 'Wird geladen …'; box.classList.remove('warn'); return; }
+    const parts = [state.clips.length
+      ? `${state.clips.length} ${state.clips.length === 1 ? 'Clip belegt' : 'Clips belegen'} ${size(state.clips_bytes)}.`
+      : 'Noch keine Clips im Ordner.'];
+    if (state.free_bytes > 0) parts.push(`Auf dem Laufwerk sind ${size(state.free_bytes)} frei.`);
+    const perMinute = bufferEstimate(settings, 60);
+    if (state.free_bytes > 0 && perMinute > 0) {
+      const minutes = Math.floor(state.free_bytes / perMinute);
+      const span = minutes >= 120 ? `${Math.floor(minutes / 60)} Stunden` : `${minutes} Minuten`;
+      parts.push(`Das reicht für etwa ${span} Aufnahme in ${qualityLabel(settings.quality)}.`);
+    }
+    const low = state.free_bytes > 0 && settings.min_free_gb > 0
+      && state.free_bytes < settings.min_free_gb * 1073741824 * 2;
+    box.textContent = parts.join(' ');
+    box.classList.toggle('warn', low);
   }
   function renderGameList(settings) {
     const list = $('game-list');
@@ -497,7 +577,9 @@
   }
   function validReplay(settings) {
     const value = Number(settings.replay_seconds);
-    return Number.isInteger(value) && value >= state.replay_min && value <= state.replay_max;
+    const long = Number(settings.replay_seconds_long);
+    const inRange = n => Number.isInteger(n) && n >= state.replay_min && n <= state.replay_max;
+    return inRange(value) && (long === 0 || inRange(long));
   }
   $('setting-display').addEventListener('change', () => edit(d => { d.display = $('setting-display').value; }));
   $('setting-quality').addEventListener('change', () => edit(d => { d.quality = $('setting-quality').value; }));
@@ -513,6 +595,12 @@
     else { d.replay_seconds = Number($('setting-replay-custom').value) || d.replay_seconds; if (state.replay_presets.includes(d.replay_seconds)) d.replay_seconds = Math.min(state.replay_max, d.replay_seconds + 15); }
   }));
   $('setting-replay-custom').addEventListener('input', () => edit(d => { d.replay_seconds = Number($('setting-replay-custom').value); }));
+  $('setting-follow-display').addEventListener('change', () => edit(d => { d.follow_game_display = $('setting-follow-display').checked; }));
+  $('setting-system-volume').addEventListener('input', () => edit(d => { d.system_volume = Number($('setting-system-volume').value); }));
+  $('setting-microphone-volume').addEventListener('input', () => edit(d => { d.microphone_volume = Number($('setting-microphone-volume').value); }));
+  $('setting-replay-long').addEventListener('input', () => edit(d => { d.replay_seconds_long = Number($('setting-replay-long').value) || 0; }));
+  $('setting-min-free').addEventListener('input', () => edit(d => { d.min_free_gb = Number($('setting-min-free').value) || 0; }));
+  $('setting-storage-limit').addEventListener('input', () => edit(d => { d.storage_limit_gb = Number($('setting-storage-limit').value) || 0; }));
   $('setting-full-session').addEventListener('change', () => edit(d => { d.keep_full_session = $('setting-full-session').checked; }));
   $('setting-close-to-tray').addEventListener('change', () => edit(d => { d.close_to_tray = $('setting-close-to-tray').checked; }));
   $('setting-record-on-launch').addEventListener('change', () => edit(d => { d.record_on_launch = $('setting-record-on-launch').checked; }));
@@ -537,7 +625,12 @@
   $('discard-settings').addEventListener('click', () => { draft = null; draftAutostart = null; renderSettings(); });
   $('save-settings').addEventListener('click', () => {
     const settings = currentSettings();
-    if (!validReplay(settings)) { $('setting-replay-custom').reportValidity(); return; }
+    if (!validReplay(settings)) {
+      const long = Number(settings.replay_seconds_long);
+      const field = long !== 0 && (long < state.replay_min || long > state.replay_max) ? 'setting-replay-long' : 'setting-replay-custom';
+      $(field).reportValidity();
+      return;
+    }
     const autostart = draftAutostart === null ? state.autostart : draftAutostart;
     ipc('save_settings', { settings, autostart });
     draft = null; draftAutostart = null;
@@ -560,29 +653,33 @@
     };
     return map[code] || null;
   };
+  const HOTKEY_FIELDS = { replay: 'hotkey_replay', replay_long: 'hotkey_replay_long', record: 'hotkey_record' };
   function bindHotkeyField(id, field) {
+    const key = HOTKEY_FIELDS[field];
     const input = $(id);
     input.addEventListener('focus', () => { capturing = field; input.classList.add('capturing'); input.value = ''; input.placeholder = 'Taste drücken …'; });
     input.addEventListener('blur', () => { capturing = null; input.classList.remove('capturing'); input.placeholder = 'Nicht belegt'; renderSettings(); });
     input.addEventListener('keydown', event => {
       event.preventDefault();
-      const key = event.key;
-      if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(key)) return;
-      if (key === 'Escape') { input.blur(); return; }
-      if (key === 'Backspace' || (key === 'Delete' && !event.ctrlKey && !event.altKey && !event.shiftKey)) {
-        edit(d => { d[field === 'replay' ? 'hotkey_replay' : 'hotkey_record'] = { ctrl: false, alt: false, shift: false, win: false, key: '' }; });
+      const pressed = event.key;
+      if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(pressed)) return;
+      if (pressed === 'Escape') { input.blur(); return; }
+      if (pressed === 'Backspace' || (pressed === 'Delete' && !event.ctrlKey && !event.altKey && !event.shiftKey)) {
+        edit(d => { d[key] = { ctrl: false, alt: false, shift: false, win: false, key: '' }; });
         input.blur();
         return;
       }
       const name = keyNameFromEvent(event);
       if (!name) { input.value = 'Diese Taste wird nicht unterstützt'; return; }
-      edit(d => { d[field === 'replay' ? 'hotkey_replay' : 'hotkey_record'] = { ctrl: event.ctrlKey, alt: event.altKey, shift: event.shiftKey, win: event.metaKey, key: name }; });
+      edit(d => { d[key] = { ctrl: event.ctrlKey, alt: event.altKey, shift: event.shiftKey, win: event.metaKey, key: name }; });
       input.blur();
     });
   }
   bindHotkeyField('hotkey-replay', 'replay');
+  bindHotkeyField('hotkey-replay-long', 'replay_long');
   bindHotkeyField('hotkey-record', 'record');
   $('hotkey-replay-clear').addEventListener('click', () => edit(d => { d.hotkey_replay = { ctrl: false, alt: false, shift: false, win: false, key: '' }; }));
+  $('hotkey-replay-long-clear').addEventListener('click', () => edit(d => { d.hotkey_replay_long = { ctrl: false, alt: false, shift: false, win: false, key: '' }; }));
   $('hotkey-record-clear').addEventListener('click', () => edit(d => { d.hotkey_record = { ctrl: false, alt: false, shift: false, win: false, key: '' }; }));
 
   // ---------------------------------------------------------------- editor
@@ -861,13 +958,17 @@
   document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => { if (!button.disabled) ipc(button.dataset.action); }));
   $('record-button').addEventListener('click', () => ipc(state.recording ? 'stop' : 'start'));
   $('replay-button').addEventListener('click', () => ipc('replay'));
+  $('replay-long-button').addEventListener('click', () => ipc('replay_long'));
   window.addEventListener('focus', () => { if (loaded && !state.busy) ipc('refresh'); });
 
-  // Used by the automated screenshot check to render other views.
+  // Used by the automated screenshot check to render other views. A page may
+  // carry an element to scroll to, for example `settings#storage-state`.
   window.showPage = page => {
-    if (page === 'editor') { view('library'); setTimeout(() => { if (state.clips[0]) openEditor(state.clips[0]); }, 300); return; }
-    view(page === 'settings' ? 'settings' : 'library');
-    if (page === 'settings') ipc('list_apps');
+    const [name, anchor] = String(page).split('#');
+    if (name === 'editor') { view('library'); setTimeout(() => { if (state.clips[0]) openEditor(state.clips[0]); }, 300); return; }
+    view(name === 'settings' ? 'settings' : 'library');
+    if (name === 'settings') ipc('list_apps');
+    if (anchor) setTimeout(() => { const target = $(anchor); if (target) target.scrollIntoView({ block: 'center' }); }, 150);
   };
 
   renderLibrary();

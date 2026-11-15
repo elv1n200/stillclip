@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "documentation": "MECHANICS.md",
   "values": [
     {
@@ -45,8 +45,8 @@
     {
       "name": "capture display",
       "group": "capture",
-      "value": "primary display by default, any attached display selectable",
-      "source": "Local choice: src/capture.rs displays (DXGI) and choose_display"
+      "value": "primary display by default, any attached display selectable; optionally the display the detected game runs on",
+      "source": "Local choice: src/capture.rs displays (DXGI) and choose_display; src/games.rs window_monitor and src/main.rs capture_display"
     },
     {
       "name": "capture dimensions",
@@ -236,6 +236,36 @@
       "group": "privacy",
       "value": false,
       "source": "Requested local-only scope: src/main.rs local IPC/media; ui/index.html CSP"
+    },
+    {
+      "name": "audio loudness per source",
+      "group": "capture",
+      "value": "0–200 % for system sound and microphone; 100 % adds no filter",
+      "source": "Local addition: src/capture.rs audio_mapping (volume filter, asplit for the separate microphone track); the original mixes at device level"
+    },
+    {
+      "name": "second replay length",
+      "group": "capture",
+      "value": "optional second clip length with its own shortcut; the ring keeps the longer of the two",
+      "source": "Local addition: src/settings.rs replay_seconds_long and buffer_seconds, src/main.rs HOTKEY_REPLAY_LONG"
+    },
+    {
+      "name": "free space reserve",
+      "group": "capture",
+      "value": "5 GB by default; the recording stops below it, checked before the start and every ten seconds",
+      "source": "Local policy: src/recorder.rs start and poll, src/platform.rs free_bytes (GetDiskFreeSpaceExW)"
+    },
+    {
+      "name": "clip folder limit",
+      "group": "library",
+      "value": "off by default; above the limit the oldest clips are deleted permanently, never the newest one",
+      "source": "Local policy: src/library.rs over_limit and src/main.rs enforce_storage_limit"
+    },
+    {
+      "name": "capture restart after a failure",
+      "group": "capture",
+      "value": "up to three restarts in five minutes; skipped while full session mode keeps the segments",
+      "source": "Local robustness: src/recorder.rs PollIssue and src/main.rs handle_issue"
     }
   ]
 }

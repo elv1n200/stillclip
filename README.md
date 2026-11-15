@@ -29,18 +29,31 @@ vorhandene `ffmpeg.exe`.
   aufgenommenen Bildschirm und ein Bestätigungston zeigen, dass der Moment
   gesichert ist. Das Banner liegt über Fenster- und randlosen Vollbildspielen
   und ist klickdurchlässig.
+- **Der richtige Bildschirm.** Läuft das erkannte Spiel auf einem anderen
+  Monitor als dem eingestellten, nimmt Stillclip diesen auf. Das Banner
+  erscheint auf demselben Bildschirm.
+- **Zwei Längen.** Neben der normalen Cliplänge lässt sich eine zweite,
+  längere einstellen – mit eigener Taste, zum Beispiel 30 Sekunden für den
+  Treffer und fünf Minuten für die ganze Runde.
 - **Ton.** Systemton (WASAPI-Loopback des Standard-Wiedergabegeräts) und
-  wahlweise ein Mikrofon werden in den Clip gemischt. Wechselt das
-  Wiedergabegerät mitten in der Aufnahme, folgt Stillclip automatisch. Das
-  Mikrofon kann zusätzlich als eigene zweite Tonspur mitlaufen.
+  wahlweise ein Mikrofon werden in den Clip gemischt, jeweils mit eigener
+  Lautstärke von 0 bis 200 Prozent. Wechselt das Wiedergabegerät mitten in der
+  Aufnahme, folgt Stillclip automatisch. Das Mikrofon kann zusätzlich als
+  eigene zweite Tonspur mitlaufen.
+- **Speicherplatz.** Stillclip beendet die Aufnahme, bevor das Laufwerk
+  volläuft, und kann auf Wunsch die ältesten Clips löschen, sobald der Ordner
+  eine eingestellte Größe überschreitet.
+- **Hält durch.** Bricht die Aufnahme von selbst ab, etwa weil ein Spiel die
+  Bildschirmauflösung umstellt, startet Stillclip sie automatisch neu – bis zu
+  dreimal in fünf Minuten.
 - **Grafikkarte.** NVENC, AMD AMF oder Intel Quick Sync werden automatisch
   erkannt und genutzt; sonst kodiert die CPU (x264). Die Bildaufnahme läuft
   über Desktop Duplication (`ddagrab`) mit GDI-Fallback.
 - **Qualität.** 720p, 1080p, 1440p oder native Auflösung; 24 bis 144 FPS;
   Mauszeiger ein- oder ausblendbar; Auswahl des Bildschirms bei mehreren
   Monitoren.
-- **Tastenkürzel.** Frei belegbare globale Kürzel für „Moment sichern“ und
-  „Aufnahme starten/beenden“ (Standard: F8).
+- **Tastenkürzel.** Frei belegbare globale Kürzel für „Moment sichern“,
+  „Längeren Moment sichern“ und „Aufnahme starten/beenden“ (Standard: F8).
 - **Hintergrund.** Symbol im Infobereich mit Menü, Schließen minimiert in den
   Infobereich, optional Aufnahme beim Start, minimierter Start und Autostart mit
   Windows (Run-Eintrag des Benutzerkontos).
@@ -85,10 +98,11 @@ und wird danach entfernt.
 | Bereich | Optionen |
 | --- | --- |
 | Spiele | Automatisch aufnehmen, eingebaute Spieleliste, eigene Spiele und Programme |
-| Aufnahme | Bildschirm, Qualität (720p/1080p/1440p/nativ), Bildrate, Encoder (automatisch/NVENC/AMF/QSV/CPU), Mauszeiger |
-| Ton | Systemton, Mikrofon, Mikrofongerät, Mikrofon als eigene Spur |
-| Rückblick | 15, 30, 60, 120, 180, 300 Sekunden oder eigene Länge (15–1200 s), exakte Cliplänge, ganze Sitzung behalten |
-| Tastenkürzel | Moment sichern, Aufnahme starten/beenden (mit Strg/Alt/Umschalt/Win) |
+| Aufnahme | Bildschirm, Bildschirm des Spiels verwenden, Qualität (720p/1080p/1440p/nativ), Bildrate, Encoder (automatisch/NVENC/AMF/QSV/CPU), Mauszeiger |
+| Ton | Systemton, Lautstärke Systemton, Mikrofon, Mikrofongerät, Lautstärke Mikrofon, Mikrofon als eigene Spur |
+| Rückblick | 15, 30, 60, 120, 180, 300 Sekunden oder eigene Länge (15–1200 s), zweite Länge, exakte Cliplänge, ganze Sitzung behalten |
+| Tastenkürzel | Moment sichern, längeren Moment sichern, Aufnahme starten/beenden (mit Strg/Alt/Umschalt/Win) |
+| Speicherplatz | Aufnahme bei wenig freiem Platz beenden, Ordnergröße begrenzen |
 | Verhalten | Banner im Spiel, Ton beim Sichern, in den Infobereich schließen, Aufnahme beim Start, minimiert starten, Autostart |
 | Speicherort | Clip-Ordner wählen und öffnen |
 
@@ -106,6 +120,15 @@ Tastenkürzel und Verhalten wirken sofort.
 - Das Mischen von Systemton und Mikrofon erfolgt in eine gemeinsame Tonspur;
   die optionale zweite Spur enthält nur das Mikrofon.
 - Kein Fenster- oder Spielmodus: Aufgenommen wird immer ein ganzer Bildschirm.
+  Startet ein erkanntes Spiel auf einem anderen Monitor, wechselt Stillclip
+  dorthin, aber erst beim Start der Aufnahme – ein Fensterwechsel während einer
+  laufenden Aufnahme ändert den Bildschirm nicht.
+- Der automatische Neustart nach einem Abbruch holt den Puffer nicht zurück:
+  Die Sekunden zwischen Abbruch und Neustart fehlen. Mit „Ganze Sitzung
+  behalten“ wird gar nicht neu gestartet, damit das Material für die
+  Wiederherstellung liegen bleibt.
+- „Älteste Clips löschen“ löscht endgültig, nicht in den Papierkorb – sonst
+  wäre der Platz nicht frei. Die Option ist deshalb von Haus aus aus.
 - Das Banner wird über ein eigenes Fenster gezeichnet. Spiele im exklusiven
   Vollbildmodus zeigen es nicht; randloses Vollbild und Fenstermodus schon.
 - Die Videovorschau hängt von den Codecs der WebView2-Laufzeit ab. MP4 mit
@@ -141,6 +164,9 @@ $env:STILLCLIP_OVERLAY_SHOT="shots/overlay.png"; cargo test --offline overlay_sm
 target/release/stillclip.exe --screenshot shots/library.png
 target/release/stillclip.exe --screenshot shots/settings.png --page settings
 target/release/stillclip.exe --screenshot shots/editor.png --page editor
+
+# Eine bestimmte Stelle der Einstellungen (Element-ID nach dem #)
+target/release/stillclip.exe --screenshot shots/ton.png --page "settings#system-volume-row"
 ```
 
 Optional setzen `STILLCLIP_DATA_DIR` den Einstellungsordner und

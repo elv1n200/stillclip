@@ -42,6 +42,10 @@ use wry::{http::Response, WebContext, WebView, WebViewBuilder};
 
 const HOTKEY_REPLAY: i32 = 1;
 const HOTKEY_RECORD: i32 = 2;
+const HOTKEY_REPLAY_LONG: i32 = 3;
+/// How often a capture that died on its own is restarted, and within which span.
+const MAX_RESTARTS: usize = 3;
+const RESTART_WINDOW: Duration = Duration::from_secs(300);
 const FPS_CHOICES: [u32; 5] = [24, 30, 60, 120, 144];
 
 pub enum AppEvent {
@@ -54,7 +58,8 @@ pub enum AppEvent {
     Capabilities(Capabilities),
     Indexed(String, IndexEntry),
     IndexingDone,
-    GameStarted(GameEntry, u32),
+    /// A watched game appeared, together with the display its window sits on.
+    GameStarted(GameEntry, String),
     GameStopped(GameEntry),
     ScreenshotFinished(Result<(), String>),
 }
@@ -117,8 +122,14 @@ struct App {
     watcher: Option<GameWatcher>,
     overlay: Option<Overlay>,
     active_game: Option<GameEntry>,
+    /// Display the detected game runs on, used when the setting follows it.
+    active_game_display: Option<String>,
     auto_started: bool,
     apps: Vec<RunningApp>,
+    /// When captures died on their own, so endless restarts stop.
+    restarts: Vec<Instant>,
+    free_bytes: u64,
+    clips_bytes: u64,
 }
 
 impl App {
@@ -145,6 +156,7 @@ impl App {
         let recovered = ffmpeg
             .as_deref()
             .and_then(|f| recorder::recover_leftovers(f, &settings.clips_dir).ok().flatten());
+        let free_bytes = platform::free_bytes(&settings.clips_dir).unwrap_or(0);
         let mut app = Self {
             index: Index::load(&config),
             config,
@@ -179,11 +191,29 @@ impl App {
             watcher: None,
             overlay: None,
             active_game: None,
+            active_game_display: None,
             auto_started: false,
             apps: games::candidate_apps(),
+            restarts: Vec::new(),
+            free_bytes,
+            clips_bytes: 0,
         };
         app.refresh();
         app
+    }
+
+    /// The display a recording should use: the game's own screen when that is
+    /// switched on, otherwise the configured one.
+    fn capture_display(&self) -> Option<&Display> {
+        let wanted = self
+            .active_game_display
+            .as_deref()
+            .filter(|name| {
+                self.settings.follow_game_display
+                    && self.displays.iter().any(|display| display.name == *name)
+            })
+            .unwrap_or(self.settings.display.as_str());
+        capture::choose_display(&self.displays, wanted)
     }
 
     fn thumbnail_dir(&self) -> PathBuf {
@@ -203,7 +233,7 @@ impl App {
         let Some(overlay) = &self.overlay else {
             return;
         };
-        let display = capture::choose_display(&self.displays, &self.settings.display);
+        let display = self.capture_display();
         let (x, y, limit) = match display {
             Some(d) => (d.x + d.width as i32 - 28, d.y + 28, (d.width as i32 / 2).max(320)),
             None => (1880, 28, 600),
@@ -240,9 +270,46 @@ impl App {
         }
     }
 
+    /// Deletes the oldest clips when the folder outgrew its limit. Only runs
+    /// when the user set one; the newest clip always survives.
+    fn enforce_storage_limit(&mut self, clips: &mut Vec<Clip>) {
+        let doomed = library::over_limit(clips, self.settings.storage_limit_bytes());
+        if doomed.is_empty() {
+            return;
+        }
+        let mut freed = 0;
+        let mut count = 0;
+        for clip in &doomed {
+            if fs::remove_file(&clip.path).is_ok() {
+                freed += clip.bytes;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return;
+        }
+        clips.retain(|clip| !doomed.iter().any(|gone| gone.path == clip.path));
+        let text = if count == 1 {
+            format!(
+                "Der älteste Clip wurde gelöscht, damit der Ordner unter {} GB bleibt ({} frei).",
+                self.settings.storage_limit_gb,
+                recorder::format_bytes(freed)
+            )
+        } else {
+            format!(
+                "{count} alte Clips wurden gelöscht, damit der Ordner unter {} GB bleibt ({} frei).",
+                self.settings.storage_limit_gb,
+                recorder::format_bytes(freed)
+            )
+        };
+        self.notify(&text, false, None);
+    }
+
     fn refresh(&mut self) {
         match library::scan_clips(&self.settings.clips_dir) {
-            Ok(clips) => {
+            Ok(mut clips) => {
+                self.enforce_storage_limit(&mut clips);
+                self.clips_bytes = clips.iter().map(|clip| clip.bytes).sum();
                 let previous: HashMap<_, _> = self
                     .clips
                     .iter()
@@ -412,6 +479,8 @@ impl App {
             "settings": self.settings,
             "autostart": self.autostart,
             "active_game": self.active_game,
+            "active_game_display": self.active_game_display,
+            "capture_display": self.capture_display().map(|d| d.name.clone()),
             "auto_started": self.auto_started,
             "apps": self.apps,
             "builtin_games": games::builtin_games(),
@@ -427,6 +496,9 @@ impl App {
             "selected_encoder": selected_encoder.label(),
             "session": self.session,
             "buffer_bytes": self.buffer_bytes,
+            "free_bytes": self.free_bytes,
+            "clips_bytes": self.clips_bytes,
+            "max_volume": settings::MAX_VOLUME,
             "notice": {
                 "sequence": self.notice.sequence,
                 "text": self.notice.text,
@@ -441,6 +513,7 @@ impl App {
             "fps_choices": FPS_CHOICES,
             "hotkeys": {
                 "replay": self.settings.hotkey_replay.label(),
+                "replay_long": self.settings.hotkey_replay_long.label(),
                 "record": self.settings.hotkey_record.label(),
                 "failed": self.hotkey_failures,
             },
@@ -461,7 +534,8 @@ impl App {
     }
 
     fn session_config(&self) -> Result<SessionConfig, String> {
-        let display = capture::choose_display(&self.displays, &self.settings.display)
+        let display = self
+            .capture_display()
             .cloned()
             .ok_or("Es wurde kein Bildschirm gefunden.")?;
         Ok(SessionConfig {
@@ -477,8 +551,11 @@ impl App {
                 .microphone
                 .then(|| self.settings.microphone_device.clone()),
             microphone_separate_track: self.settings.microphone_separate_track,
-            replay_seconds: self.settings.replay_seconds,
+            system_gain: settings::gain(self.settings.system_volume),
+            microphone_gain: settings::gain(self.settings.microphone_volume),
+            replay_seconds: self.settings.buffer_seconds(),
             keep_full_session: self.settings.keep_full_session,
+            min_free_bytes: self.settings.min_free_bytes(),
             precise_clips: self.settings.precise_clips,
             clips_dir: self.settings.clips_dir.clone(),
         })
@@ -513,7 +590,11 @@ impl App {
         }
         .into();
         let action = action.to_owned();
-        let replay_seconds = self.settings.replay_seconds;
+        let replay_seconds = if action == "replay_long" && self.settings.replay_seconds_long > 0 {
+            self.settings.replay_seconds_long
+        } else {
+            self.settings.replay_seconds
+        };
         let prefix = self.clip_prefix();
         let game = self.active_game.as_ref().map(|g| g.name.clone());
         std::thread::spawn(move || {
@@ -564,6 +645,38 @@ impl App {
         });
     }
 
+    /// Reacts to something the recorder reported by itself: a capture that died
+    /// is started again a few times, a nearly full drive ends the recording.
+    fn handle_issue(&mut self, issue: recorder::PollIssue, proxy: EventLoopProxy<AppEvent>) {
+        self.message(Err(issue.message.clone()));
+        self.notify(&issue.message, true, None);
+        if issue.low_disk {
+            self.banner("Speicherplatz knapp – Aufnahme wird beendet", true);
+            if self.recording && !self.busy {
+                self.auto_started = false;
+                self.recording_job("stop", proxy);
+            }
+            return;
+        }
+        self.refresh();
+        if !issue.capture_lost || self.busy || self.ffmpeg.is_none() {
+            return;
+        }
+        let now = Instant::now();
+        self.restarts.retain(|at| now.duration_since(*at) < RESTART_WINDOW);
+        if self.restarts.len() >= MAX_RESTARTS {
+            self.notify(
+                "Die Aufnahme ist mehrfach abgebrochen und wird nicht weiter neu gestartet.",
+                true,
+                None,
+            );
+            return;
+        }
+        self.restarts.push(now);
+        self.notify("Die Aufnahme wird automatisch neu gestartet.", false, None);
+        self.recording_job("start", proxy);
+    }
+
     fn file_job(
         &mut self,
         proxy: EventLoopProxy<AppEvent>,
@@ -586,6 +699,15 @@ impl App {
         let mut bindings = Vec::new();
         if let Some(key) = self.settings.hotkey_replay.virtual_key() {
             bindings.push((HOTKEY_REPLAY, self.settings.hotkey_replay.modifiers(), key));
+        }
+        if self.settings.replay_seconds_long > 0 {
+            if let Some(key) = self.settings.hotkey_replay_long.virtual_key() {
+                bindings.push((
+                    HOTKEY_REPLAY_LONG,
+                    self.settings.hotkey_replay_long.modifiers(),
+                    key,
+                ));
+            }
         }
         if let Some(key) = self.settings.hotkey_record.virtual_key() {
             bindings.push((HOTKEY_RECORD, self.settings.hotkey_record.modifiers(), key));
@@ -616,6 +738,8 @@ impl App {
                 || settings.system_audio != self.settings.system_audio
                 || settings.microphone != self.settings.microphone
                 || settings.microphone_device != self.settings.microphone_device
+                || settings.system_volume != self.settings.system_volume
+                || settings.microphone_volume != self.settings.microphone_volume
                 || settings.keep_full_session != self.settings.keep_full_session
                 || settings.clips_dir != self.settings.clips_dir);
         if restricted {
@@ -637,15 +761,18 @@ impl App {
         match settings::save_settings(&self.config, &settings) {
             Ok(()) => {
                 let hotkeys_changed = settings.hotkey_replay != self.settings.hotkey_replay
+                    || settings.hotkey_replay_long != self.settings.hotkey_replay_long
+                    || settings.replay_seconds_long != self.settings.replay_seconds_long
                     || settings.hotkey_record != self.settings.hotkey_record;
                 let folder_changed = settings.clips_dir != self.settings.clips_dir;
+                let limit_changed = settings.storage_limit_gb != self.settings.storage_limit_gb;
                 self.settings = settings;
                 if hotkeys_changed {
                     self.apply_hotkeys();
                 }
                 self.apply_games();
                 self.message(Ok("Einstellungen gespeichert.".into()));
-                if folder_changed {
+                if folder_changed || limit_changed {
                     self.refresh();
                 }
             }
@@ -659,7 +786,7 @@ impl App {
             return;
         }
         if self.busy {
-            if matches!(action, "start" | "stop" | "toggle" | "replay") {
+            if matches!(action, "start" | "stop" | "toggle" | "replay" | "replay_long") {
                 self.message(Err("Einen Moment, der letzte Vorgang läuft noch.".into()));
             }
             return;
@@ -672,7 +799,7 @@ impl App {
                 self.default_output = audio::default_output_name();
                 self.refresh();
             }
-            "start" | "stop" | "replay" => self.recording_job(action, proxy),
+            "start" | "stop" | "replay" | "replay_long" => self.recording_job(action, proxy),
             "toggle" => {
                 let next = if self.recording { "stop" } else { "start" };
                 self.recording_job(next, proxy);
@@ -1112,6 +1239,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut screenshot_requested = false;
     let mut launched = false;
     let mut next_tick = Instant::now() + Duration::from_millis(500);
+    let mut ticks: u64 = 0;
     let show_window = |window: &tao::window::Window, app: &mut App| {
         window.set_visible(true);
         window.set_minimized(false);
@@ -1166,7 +1294,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     HOTKEY_REPLAY if app.recording && !app.busy => {
                         app.recording_job("replay", proxy.clone());
                     }
-                    HOTKEY_REPLAY if !app.recording && !app.busy => {
+                    HOTKEY_REPLAY_LONG if app.recording && !app.busy => {
+                        app.recording_job("replay_long", proxy.clone());
+                    }
+                    HOTKEY_REPLAY | HOTKEY_REPLAY_LONG if !app.recording && !app.busy => {
                         app.notify("Es läuft keine Aufnahme. Starte zuerst die Aufnahme.", true, None);
                     }
                     HOTKEY_RECORD if !app.busy => {
@@ -1184,6 +1315,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .iter()
                         .map(|id| match *id {
                             HOTKEY_REPLAY => app.settings.hotkey_replay.label(),
+                            HOTKEY_REPLAY_LONG => app.settings.hotkey_replay_long.label(),
                             _ => app.settings.hotkey_record.label(),
                         })
                         .collect();
@@ -1241,12 +1373,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 app.schedule_indexing();
                 app.sync(&view);
             }
-            Event::UserEvent(AppEvent::GameStarted(game, _pid)) => {
+            Event::UserEvent(AppEvent::GameStarted(game, monitor)) => {
                 let name = game.name.clone();
                 app.active_game = Some(game);
+                app.active_game_display = (!monitor.is_empty()).then_some(monitor);
                 if app.settings.auto_record_games && app.ffmpeg.is_some() {
                     if !app.recording && !app.busy {
                         app.auto_started = true;
+                        app.restarts.clear();
                         app.notify(&format!("{name} erkannt – die Aufnahme startet."), false, None);
                         app.recording_job("start", proxy.clone());
                     } else {
@@ -1260,6 +1394,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let name = game.name.clone();
                 if app.active_game.as_ref().is_some_and(|g| g.exe == game.exe) {
                     app.active_game = None;
+                    app.active_game_display = None;
                 }
                 if app.auto_started && app.recording && !app.busy {
                     app.auto_started = false;
@@ -1307,6 +1442,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Event::NewEvents(_) if Instant::now() >= next_tick => {
                 next_tick = Instant::now() + Duration::from_millis(500);
+                ticks = ticks.wrapping_add(1);
+                // Free space changes slowly; asking the drive every ten seconds
+                // is plenty and keeps the warning in the UI current.
+                if ticks % 20 == 1 && !checking {
+                    let free = platform::free_bytes(&app.settings.clips_dir).unwrap_or(0);
+                    if free != app.free_bytes {
+                        app.free_bytes = free;
+                        app.sync(&view);
+                    }
+                }
                 if checking
                     && !screenshot_requested
                     && ready_at.is_some_and(|t| t.elapsed() >= Duration::from_secs(2))
@@ -1320,13 +1465,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 if let Some(recorder) = app.recorder.as_mut() {
-                    let error = recorder.poll();
+                    let issue = recorder.poll();
                     let elapsed = recorder.elapsed().as_secs();
                     let recording = recorder.is_recording();
                     let buffer_bytes = if recording { recorder.buffer_bytes() } else { 0 };
                     let changed = elapsed != app.elapsed
                         || recording != app.recording
-                        || error.is_some()
+                        || issue.is_some()
                         || buffer_bytes != app.buffer_bytes;
                     app.elapsed = elapsed;
                     app.buffer_bytes = buffer_bytes;
@@ -1335,10 +1480,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         app.session = recorder.info().cloned();
                         app.update_tray();
                     }
-                    if let Some(error) = error {
-                        app.message(Err(error.clone()));
-                        app.notify(&error, true, None);
-                        app.refresh();
+                    if let Some(issue) = issue {
+                        app.handle_issue(issue, proxy.clone());
                     }
                     if changed {
                         app.sync(&view);
