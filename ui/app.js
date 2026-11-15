@@ -116,7 +116,7 @@
     parts.push(hotkey.key);
     return parts.join(' + ');
   };
-  const clipLength = seconds => (seconds >= 120 ? `${Math.round(seconds / 60)} Min.` : `${seconds} Sek.`);
+  const clipLength = seconds => (seconds >= 120 ? `${Math.round(seconds / 60)} min` : `${seconds} s`);
   const qualityLabel = quality => ({ p720: '720p', p1080: '1080p', p1440: '1440p', native: 'Nativ' }[quality] || quality);
   const currentSettings = () => draft || state.settings;
   const displayFor = name => state.displays.find(d => d.name === name) || state.displays.find(d => d.primary) || state.displays[0];
@@ -251,7 +251,6 @@
     $('nav-count').textContent = state.clips.length;
     $('library-count').textContent = state.clips.length;
     $('empty-state').hidden = state.clips.length !== 0;
-    $('first-steps').hidden = state.clips.length !== 0;
     $('no-results').hidden = !(state.clips.length && !clips.length);
     const grid = $('clip-grid');
     grid.replaceChildren(...clips.map(clipCard));
@@ -309,32 +308,24 @@
     const recording = state.recording;
     const replayLabel = hotkeyLabel(settings.hotkey_replay);
     $('record-card').classList.toggle('recording', recording);
-    $('record-status').textContent = recording ? 'Aufnahme läuft' : 'Bereit für deinen Moment';
+    $('record-status').textContent = recording
+      ? 'Aufnahme läuft'
+      : (state.ffmpeg_available ? 'Bereit' : 'FFmpeg fehlt');
     const game = state.active_game;
     $('game-chip').hidden = !game;
-    $('game-chip').textContent = game ? `${game.name} erkannt` : '';
+    $('game-chip').textContent = game ? game.name : '';
     $('side-session-game').hidden = !game;
     $('side-session-game').textContent = game ? game.name : '';
-    $('record-title').textContent = recording
-      ? (game ? `${game.name} läuft – die letzten ${settings.replay_seconds} Sekunden sind immer griffbereit.` : `Stillclip merkt sich die letzten ${settings.replay_seconds} Sekunden.`)
-      : (settings.auto_record_games ? 'Starte ein Spiel – oder die Aufnahme selbst.' : 'Ein guter Moment? Behalte ihn.');
-    $('record-description').textContent = recording
-      ? (settings.hotkey_replay.key
-        ? `Drücke ${replayLabel}, um den Moment als Clip zu sichern. Die Aufnahme läuft dabei ohne Unterbrechung weiter.`
-        : 'Klicke auf „Moment sichern“, um die letzten Sekunden als Clip zu behalten. Die Aufnahme läuft dabei weiter.')
-      : (settings.auto_record_games
-        ? 'Bekannte Spiele werden erkannt und automatisch aufgenommen. Du kannst die Aufnahme jederzeit auch manuell starten.'
-        : 'Starte die Aufnahme. Stillclip merkt sich die letzten Sekunden und sichert sie auf Tastendruck – ohne Lücke, ohne Riesendateien.');
     $('record-button').classList.toggle('btn-danger', recording);
     $('record-button').classList.toggle('btn-primary', !recording);
     $('record-button-text').textContent = recording ? 'Aufnahme beenden' : 'Aufnahme starten';
     $('record-button').disabled = unavailable || (!recording && !state.ffmpeg_available);
     $('replay-button').disabled = unavailable || !recording || !state.ffmpeg_available;
-    $('replay-button-text').textContent = `Letzte ${settings.replay_seconds} Sek. sichern`;
+    $('replay-button-text').textContent = `${clipLength(settings.replay_seconds)} sichern`;
     const long = Number(settings.replay_seconds_long) || 0;
     $('replay-long-button').hidden = long <= 0;
     $('replay-long-button').disabled = unavailable || !recording || !state.ffmpeg_available;
-    $('replay-long-button-text').textContent = `Letzte ${clipLength(long)} sichern`;
+    $('replay-long-button-text').textContent = `${clipLength(long)} sichern`;
     $('timer').textContent = clock(state.elapsed);
     $('hotkey-replay-label').textContent = replayLabel;
     $('mark-button').disabled = unavailable || !recording || !state.ffmpeg_available;
@@ -385,8 +376,6 @@
     side.classList.toggle('recording', recording);
     $('side-session-label').textContent = recording ? 'Aufnahme läuft' : (state.ffmpeg_available ? 'Bereit' : 'FFmpeg fehlt');
     $('side-session-timer').textContent = clock(state.elapsed);
-    $('side-hotkey').textContent = replayLabel;
-    $('side-session-hint').hidden = !settings.hotkey_replay.key;
   }
 
   // Marked moments waiting for their clip. Rebuilt only when something about
