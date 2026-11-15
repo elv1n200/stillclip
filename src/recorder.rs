@@ -872,20 +872,67 @@ fn probe_range(ffprobe: &Path, path: &Path) -> Option<Range> {
 
 /// Presentation times of video keyframes in the file's own timeline.
 fn keyframes(ffprobe: &Path, path: &Path) -> Vec<f64> {
-    let Ok(output) = command(ffprobe)
+    keyframes_in(ffprobe, path, None)
+}
+
+/// The keyframe at or before `at`, or `at` itself when none can be read.
+/// Only a short window around the spot is scanned, so this stays quick even
+/// on a long video.
+pub fn keyframe_before(ffprobe: &Path, path: &Path, at: f64) -> f64 {
+    let from = (at - 12.0).max(0.0);
+    keyframes_in(ffprobe, path, Some((from, at + 0.5)))
+        .into_iter()
+        .filter(|key| *key <= at + 0.0005)
+        .fold(None, |best: Option<f64>, key| Some(best.map_or(key, |b| b.max(key))))
+        .unwrap_or(at)
+}
+
+/// Presentation time of the first video packet, which a stream copy shifts so
+/// the earliest packet of any stream lands at zero.
+fn first_video_pts(ffprobe: &Path, path: &Path) -> Option<f64> {
+    let output = command(ffprobe)
         .args([
             "-v",
             "error",
             "-select_streams",
             "v:0",
+            "-read_intervals",
+            "%+1.0",
             "-show_entries",
-            "packet=pts_time,flags",
+            "packet=pts_time",
             "-of",
             "csv=p=0",
         ])
         .arg(path)
         .output()
-    else {
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().trim_end_matches(',').parse::<f64>().ok())
+        .fold(None, |best: Option<f64>, pts| {
+            Some(best.map_or(pts, |b| b.min(pts)))
+        })
+}
+
+/// Keyframe times, optionally limited to `from..to` seconds of the file.
+fn keyframes_in(ffprobe: &Path, path: &Path, window: Option<(f64, f64)>) -> Vec<f64> {
+    let mut probe = command(ffprobe);
+    probe.args([
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "packet=pts_time,flags",
+        "-of",
+        "csv=p=0",
+    ]);
+    if let Some((from, to)) = window {
+        probe
+            .arg("-read_intervals")
+            .arg(format!("{from:.3}%+{:.3}", (to - from).max(0.1)));
+    }
+    let Ok(output) = probe.arg(path).output() else {
         return Vec::new();
     };
     String::from_utf8_lossy(&output.stdout)
@@ -1326,6 +1373,8 @@ pub enum TrimMode {
 }
 
 /// Exports a section as a new MP4; the source file is never modified.
+/// Returns where the new clip begins inside the source, which in fast mode is
+/// the keyframe at or before `start`.
 pub fn trim_clip(
     ffmpeg: &Path,
     input: &Path,
@@ -1333,7 +1382,7 @@ pub fn trim_clip(
     start: f64,
     end: f64,
     mode: TrimMode,
-) -> Result<(), String> {
+) -> Result<f64, String> {
     if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
         return Err("Wähle einen gültigen Clipbereich mit Ende nach dem Anfang.".into());
     }
@@ -1420,7 +1469,18 @@ pub fn trim_clip(
         let _ = fs::remove_file(output);
         return Err("Der Export hat keine Videodaten erzeugt.".into());
     }
-    Ok(())
+    Ok(match mode {
+        TrimMode::Precise => start,
+        // The copy begins at the keyframe before the cut, and the stream whose
+        // first packet lands at zero may sit even earlier: both together say
+        // which moment of the source the new clip starts with.
+        TrimMode::Fast => ffprobe_for(ffmpeg)
+            .map(|ffprobe| {
+                let keyframe = keyframe_before(&ffprobe, input, start);
+                keyframe - first_video_pts(&ffprobe, output).unwrap_or(0.0)
+            })
+            .unwrap_or(start),
+    })
 }
 
 /// Writes a JPEG poster frame for the library.
@@ -1652,10 +1712,24 @@ mod tests {
         assert!(info.audio);
         for (mode, name) in [(TrimMode::Precise, "precise.mp4"), (TrimMode::Fast, "fast.mp4")] {
             let trimmed = directory.join(name);
-            trim_clip(&ffmpeg, &source, &trimmed, 1.0, 3.0, mode).unwrap();
+            // The cut reports where it really starts, so marked moments can move with it.
+            let from = trim_clip(&ffmpeg, &source, &trimmed, 1.4, 3.0, mode).unwrap();
+            match mode {
+                TrimMode::Precise => assert_eq!(from, 1.4),
+                // Keyframes sit one second apart here, and the copied audio
+                // begins a little before that keyframe.
+                TrimMode::Fast => assert!((0.7..=1.01).contains(&from), "fast cut starts at {from}"),
+            }
             let duration = probe_duration(&ffmpeg, &trimmed).unwrap();
-            // Fast mode starts at the previous keyframe (one second apart here).
-            assert!((1.9..=3.2).contains(&duration), "wrong duration: {duration}");
+            assert!((1.5..=2.4).contains(&duration), "wrong duration: {duration}");
+            // Marked moments of the source move into the new clip; the one
+            // before the cut is left behind.
+            let moved = crate::marker_offsets(&[0.5, 1.5, 2.9], from, 3.0 - from);
+            let expected: Vec<f64> = [1.5 - from, 2.9 - from].into_iter().collect();
+            assert_eq!(moved.len(), expected.len(), "{moved:?} for a cut at {from}");
+            for (got, want) in moved.iter().zip(&expected) {
+                assert!((got - want).abs() < 0.001, "{moved:?} instead of {expected:?}");
+            }
             assert!(trim_clip(&ffmpeg, &source, &trimmed, 0.0, 1.0, mode).is_err(), "must not overwrite");
         }
         assert_eq!(fs::read(&source).unwrap(), original_bytes, "original must stay intact");

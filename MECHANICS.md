@@ -275,5 +275,9 @@ extra-duration padding is still documented but not applied.
   on the session timeline, including the seconds an exact-length re-encode
   dropped from its front. Marks falling into that span are stored with the clip
   in the media index as offsets from its start, so the editor can draw them and
-  jump between them. They are kept when the clip is re-indexed or renamed, and
-  a clip cut from another clip starts without them.
+  jump between them. They are kept when the clip is re-indexed or renamed.
+- **Marks across a cut.** Trimming reports where the new clip begins inside its
+  source. A precise cut starts exactly at the chosen second; a stream copy
+  starts at the keyframe at or before it, minus the offset the copy applies
+  when it shifts the earliest packet of any stream to zero. The marks inside
+  that span move to the new clip, the others stay behind with the original.

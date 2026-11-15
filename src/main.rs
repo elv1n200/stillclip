@@ -470,12 +470,7 @@ impl App {
             "height": entry.map(|e| e.info.height),
             "audio": entry.map(|e| e.info.audio),
             // Marked moments are kept by path, so they show before the clip is indexed.
-            "markers": self
-                .index
-                .entries
-                .get(&library::index_key(&clip.path))
-                .map(|e| e.markers.clone())
-                .unwrap_or_default(),
+            "markers": self.markers_of(&clip.path),
             "pending": entry.is_none(),
             "path": clip.path,
         })
@@ -748,6 +743,15 @@ impl App {
         self.notify(&text, false, None);
         self.status = text;
         self.error = false;
+    }
+
+    /// The marked moments stored for a clip, in seconds from its start.
+    fn markers_of(&self, path: &Path) -> Vec<f64> {
+        self.index
+            .entries
+            .get(&library::index_key(path))
+            .map(|entry| entry.markers.clone())
+            .unwrap_or_default()
     }
 
     /// Keeps the marked moments of a finished clip with that clip, so they are
@@ -1141,17 +1145,23 @@ impl App {
                     };
                     let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
                     let dir = self.settings.clips_dir.clone();
+                    // Marked moments of the source; the ones inside the cut move along.
+                    let marks = self.markers_of(&path);
+                    let events = proxy.clone();
                     self.file_job(proxy, "Dein Clip wird geschnitten…", move || {
                         let duration = recorder::probe_duration(&ffmpeg, &path)?;
                         let Some((start, end)) = mechanics::editor_range(start, end, duration) else {
                             return Err("Der Ausschnitt muss mindestens zwei Sekunden lang sein und innerhalb des Videos liegen. Kürzere Videos können vollständig gespeichert werden.".into());
                         };
                         let output = unique_trim_path(&dir, &stem);
-                        recorder::trim_clip(&ffmpeg, &path, &output, start, end, mode).map(|_| JobOutcome {
-                            message: "Schnitt als neuer Clip gespeichert. Das Original bleibt erhalten.".into(),
-                            saved: Some(output),
-                            session: None,
-                            replay: false,
+                        recorder::trim_clip(&ffmpeg, &path, &output, start, end, mode).map(|from| {
+                            send_markers(&events, &output, &marks, from, end - from);
+                            JobOutcome {
+                                message: "Schnitt als neuer Clip gespeichert. Das Original bleibt erhalten.".into(),
+                                saved: Some(output),
+                                session: None,
+                                replay: false,
+                            }
                         })
                     });
                 }
@@ -1229,6 +1239,7 @@ impl App {
                         .unwrap_or_default();
                     self.remember_markers(path, moved);
                 }
+
                 let has_warnings = outcome
                     .session
                     .as_ref()
