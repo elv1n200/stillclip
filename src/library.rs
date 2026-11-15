@@ -67,6 +67,31 @@ pub fn scan_clips(dir: &Path) -> Result<Vec<Clip>, String> {
     Ok(clips)
 }
 
+/// The oldest clips that have to go so the folder fits into `limit_bytes`.
+/// A limit of zero switches the cap off, and the newest clip is never on the
+/// list – a limit smaller than a single clip must not empty the folder.
+pub fn over_limit(clips: &[Clip], limit_bytes: u64) -> Vec<Clip> {
+    if limit_bytes == 0 || clips.len() < 2 {
+        return Vec::new();
+    }
+    let mut total: u64 = clips.iter().map(|clip| clip.bytes).sum();
+    if total <= limit_bytes {
+        return Vec::new();
+    }
+    let mut oldest: Vec<&Clip> = clips.iter().collect();
+    oldest.sort_by_key(|clip| clip.created.or(clip.modified).unwrap_or(UNIX_EPOCH));
+    oldest.pop();
+    let mut doomed = Vec::new();
+    for clip in oldest {
+        if total <= limit_bytes {
+            break;
+        }
+        total = total.saturating_sub(clip.bytes);
+        doomed.push(clip.clone());
+    }
+    doomed
+}
+
 // Reserve the destination before copying: fs::copy alone can overwrite a clip.
 fn copy_new(source: &Path, destination: &Path) -> io::Result<()> {
     let mut input = File::open(source)?;
@@ -290,6 +315,38 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn clip(name: &str, gigabytes: u64, age_days: u64) -> Clip {
+        Clip {
+            path: PathBuf::from(format!("C:/clips/{name}.mp4")),
+            name: name.into(),
+            bytes: gigabytes * 1024 * 1024 * 1024,
+            created: Some(UNIX_EPOCH + std::time::Duration::from_secs(86_400 * (400 - age_days))),
+            modified: None,
+        }
+    }
+
+    #[test]
+    fn storage_limit_removes_the_oldest_clips_only() {
+        let clips = vec![
+            clip("neu", 3, 1),
+            clip("mittel", 4, 20),
+            clip("alt", 5, 90),
+        ];
+        // Off by default and quiet while the folder fits.
+        assert!(over_limit(&clips, 0).is_empty());
+        assert!(over_limit(&clips, 12 * 1024 * 1024 * 1024).is_empty());
+        // 10 GB: the oldest clip goes, the rest stays.
+        let doomed = over_limit(&clips, 10 * 1024 * 1024 * 1024);
+        assert_eq!(doomed.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["alt"]);
+        // 3 GB: everything but the newest clip, which is never deleted.
+        let doomed = over_limit(&clips, 3 * 1024 * 1024 * 1024);
+        assert_eq!(
+            doomed.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["alt", "mittel"]
+        );
+        assert!(over_limit(&clips[..1], 1).is_empty());
     }
 
     #[test]

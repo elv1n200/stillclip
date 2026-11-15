@@ -102,8 +102,14 @@ pub struct SessionConfig {
     /// `Some(device id)` enables the microphone; an empty id is the default device.
     pub microphone: Option<String>,
     pub microphone_separate_track: bool,
+    /// Loudness factors; 1.0 keeps the original level.
+    pub system_gain: f32,
+    pub microphone_gain: f32,
+    /// Seconds the segment ring keeps, which is the longest clip length in use.
     pub replay_seconds: u32,
     pub keep_full_session: bool,
+    /// Stop the recording while less than this many bytes are free; 0 is off.
+    pub min_free_bytes: u64,
     /// Re-encode replay clips to the exact requested length.
     pub precise_clips: bool,
     pub clips_dir: PathBuf,
@@ -155,6 +161,18 @@ struct Session {
     precise: bool,
     encoder: Encoder,
     rates: crate::encoding::CaptureEncoding,
+    min_free_bytes: u64,
+    ticks: u32,
+}
+
+/// Something that happened on its own while recording and that the app has to
+/// react to. Returned by [`Recorder::poll`].
+pub struct PollIssue {
+    pub message: String,
+    /// FFmpeg died by itself; starting a fresh capture is worth a try.
+    pub capture_lost: bool,
+    /// The drive is nearly full; stop and keep what has been recorded.
+    pub low_disk: bool,
 }
 
 pub struct Recorder {
@@ -330,15 +348,18 @@ impl Recorder {
     fn start_audio(config: &SessionConfig, warnings: &mut Vec<String>) -> Vec<AudioPipe> {
         let mut pipes = Vec::new();
         if config.system_audio {
-            match AudioPipe::start(AudioSource::Loopback) {
+            match AudioPipe::start(AudioSource::Loopback, config.system_gain) {
                 Ok(pipe) => pipes.push(pipe),
                 Err(error) => warnings.push(format!("Systemton nicht verfügbar: {error}")),
             }
         }
         if let Some(device) = &config.microphone {
-            match AudioPipe::start(AudioSource::Microphone {
-                device_id: device.clone(),
-            }) {
+            match AudioPipe::start(
+                AudioSource::Microphone {
+                    device_id: device.clone(),
+                },
+                config.microphone_gain,
+            ) {
                 Ok(pipe) => pipes.push(pipe),
                 Err(error) => warnings.push(format!("Mikrofon nicht verfügbar: {error}")),
             }
@@ -359,6 +380,17 @@ impl Recorder {
         }
         fs::create_dir_all(&config.clips_dir)
             .map_err(|error| format!("Der Clip-Ordner konnte nicht erstellt werden: {error}"))?;
+        if config.min_free_bytes > 0 {
+            if let Some(free) = crate::platform::free_bytes(&config.clips_dir) {
+                if free < config.min_free_bytes {
+                    return Err(format!(
+                        "Auf dem Laufwerk des Clip-Ordners sind nur noch {} frei. Mindestens {} werden verlangt.",
+                        format_bytes(free),
+                        format_bytes(config.min_free_bytes)
+                    ));
+                }
+            }
+        }
         let clips_dir = plain_path(
             &fs::canonicalize(&config.clips_dir)
                 .map_err(|error| format!("Der Clip-Ordner ist nicht verfügbar: {error}"))?,
@@ -467,6 +499,8 @@ impl Recorder {
                     let (cw, ch, mbps) = config.quality.configured();
                     crate::encoding::CaptureEncoding::for_output(width, height, config.fps, cw, ch, mbps)
                 },
+                min_free_bytes: config.min_free_bytes,
+                ticks: 0,
             });
             return Ok(info);
         }
@@ -477,24 +511,57 @@ impl Recorder {
         ))
     }
 
-    /// Call periodically while recording: surfaces failures and trims old segments.
-    pub fn poll(&mut self) -> Option<String> {
+    /// Call periodically while recording: surfaces failures, watches the free
+    /// space and trims old segments.
+    pub fn poll(&mut self) -> Option<PollIssue> {
         let session = self.session.as_mut()?;
+        let keep_full = session.keep_full;
         match session.child.try_wait() {
             Ok(None) => {}
             Ok(Some(status)) => {
                 let session = self.session.take()?;
                 let detail = log_detail(&session.log_path);
-                return Some(format!(
-                    "Die Bildschirmaufnahme wurde unerwartet beendet ({status}). {detail}"
-                ));
+                // Without full-session mode the buffer is worthless now; clearing
+                // it lets a fresh capture start on the spot.
+                if !keep_full {
+                    let _ = fs::remove_dir_all(&session.dir);
+                }
+                return Some(PollIssue {
+                    message: format!(
+                        "Die Bildschirmaufnahme wurde unerwartet beendet ({status}). {detail}"
+                    ),
+                    capture_lost: !keep_full,
+                    low_disk: false,
+                });
             }
             Err(error) => {
                 if let Some(mut session) = self.session.take() {
                     let _ = session.child.kill();
                     let _ = session.child.wait();
                 }
-                return Some(format!("Der Aufnahmestatus konnte nicht geprüft werden: {error}"));
+                return Some(PollIssue {
+                    message: format!("Der Aufnahmestatus konnte nicht geprüft werden: {error}"),
+                    capture_lost: false,
+                    low_disk: false,
+                });
+            }
+        }
+        let session = self.session.as_mut()?;
+        session.ticks = session.ticks.wrapping_add(1);
+        // Roughly every ten seconds: a full drive would corrupt the recording
+        // and leave Windows without room, so stop while there is still space.
+        if session.min_free_bytes > 0 && session.ticks % 20 == 0 {
+            if let Some(free) = crate::platform::free_bytes(&session.clips_dir) {
+                if free < session.min_free_bytes {
+                    return Some(PollIssue {
+                        message: format!(
+                            "Auf dem Laufwerk sind nur noch {} frei. Die Aufnahme wird beendet.",
+                            format_bytes(free)
+                        ),
+                        capture_lost: false,
+                        low_disk: true,
+                    });
+                }
             }
         }
         if !session.keep_full {
@@ -866,6 +933,17 @@ fn finish_process(child: &mut Child, timeout: Duration) -> Result<std::process::
     }
 }
 
+/// Byte counts for messages: `4,7 GB`, `820 MB`.
+pub fn format_bytes(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    let megabytes = bytes as f64 / MB;
+    if megabytes >= 1024.0 {
+        format!("{:.1} GB", megabytes / 1024.0).replace('.', ",")
+    } else {
+        format!("{} MB", megabytes.round() as u64)
+    }
+}
+
 /// Removes characters Windows does not allow in file names.
 pub fn sanitize_prefix(prefix: &str) -> String {
     let cleaned: String = prefix
@@ -1212,6 +1290,47 @@ mod tests {
         assert_eq!(sanitize_prefix("..."), "Clip");
     }
 
+    /// The free-space guard has to refuse before FFmpeg is ever started.
+    #[test]
+    fn recording_refuses_to_start_without_free_space() {
+        let dir = env::temp_dir().join(format!("stillclip-space-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let mut recorder = Recorder::new(PathBuf::from("missing-ffmpeg"));
+        let config = SessionConfig {
+            display: Display {
+                name: "\\\\.\\DISPLAY1".into(),
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                primary: true,
+                output_idx: 0,
+                adapter_idx: 0,
+            },
+            encoder: Encoder::Cpu,
+            capabilities: Capabilities::default(),
+            fps: 60,
+            quality: Quality::P720,
+            show_cursor: false,
+            system_audio: false,
+            microphone: None,
+            microphone_separate_track: false,
+            system_gain: 1.0,
+            microphone_gain: 1.0,
+            replay_seconds: 30,
+            keep_full_session: false,
+            min_free_bytes: u64::MAX,
+            precise_clips: false,
+            clips_dir: dir.clone(),
+        };
+        let error = recorder.start(config).expect_err("no space, no recording");
+        assert!(error.contains("frei"), "{error}");
+        assert!(!recorder.is_recording());
+        // Nothing was prepared: no buffer folder was left behind.
+        assert!(!buffer_dir(&dir).exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn rejects_invalid_trim_ranges_before_running_ffmpeg() {
         for (start, end) in [(1.0, 0.0), (-1.0, 5.0), (0.0, f64::NAN)] {
@@ -1273,6 +1392,14 @@ mod tests {
         assert_eq!(plain_path(Path::new(r"\\?\UNC\nas\share\a.mp4")), PathBuf::from(r"\\nas\share\a.mp4"));
         assert_eq!(plain_path(Path::new(r"C:\Clips\a.mp4")), PathBuf::from(r"C:\Clips\a.mp4"));
         assert_eq!(ffmpeg_path(Path::new(r"\\?\C:\Clips\seg-000001.ts")), "C:/Clips/seg-000001.ts");
+    }
+
+    #[test]
+    fn byte_counts_read_like_german_sizes() {
+        assert_eq!(format_bytes(0), "0 MB");
+        assert_eq!(format_bytes(820 * 1024 * 1024), "820 MB");
+        assert_eq!(format_bytes(5 * 1024 * 1024 * 1024), "5,0 GB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024 * 3 / 2), "1,5 GB");
     }
 
     #[test]
@@ -1380,8 +1507,11 @@ mod tests {
                 system_audio: true,
                 microphone: None,
                 microphone_separate_track: false,
+                system_gain: 1.0,
+                microphone_gain: 1.0,
                 replay_seconds: 30,
                 keep_full_session: true,
+                min_free_bytes: 0,
                 precise_clips: false,
                 clips_dir: dir.clone(),
             })
@@ -1418,8 +1548,11 @@ capabilities {capabilities:?}");
                 system_audio: true,
                 microphone: None,
                 microphone_separate_track: false,
+                system_gain: 1.0,
+                microphone_gain: 1.0,
                 replay_seconds: 30,
                 keep_full_session: true,
+                min_free_bytes: 0,
                 precise_clips: true,
                 clips_dir: dir.clone(),
             })

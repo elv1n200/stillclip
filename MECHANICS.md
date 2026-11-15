@@ -218,3 +218,37 @@ extra-duration padding is still documented but not applied.
   fifteen seconds, with silence padded in between so the audio clock keeps
   following wall-clock time. The microphone can additionally be kept as a
   second track; the original mixes into one track.
+
+## Version 0.4: the right screen, loudness, disk and endurance (2026-11-15)
+
+- **Capture display follows the game.** The watcher reports the display device
+  name of the game's own window (`MonitorFromWindow` plus `GetMonitorInfoW`).
+  When "use the game's display" is on, that display is recorded and the banner
+  is drawn on it, instead of the fixed choice in the settings. The display is
+  decided when a recording starts; moving the window later does not move the
+  capture. The original binds its capture to the game process, which this local
+  screen-based approach deliberately does not reproduce.
+- **Loudness per source.** Each audio input carries a gain. One source uses
+  `-af volume=`, several sources get a `volume` filter each before `amix`, and
+  a microphone that is also kept as its own track is split with `asplit=2` so
+  both the mix and the separate track carry the same adjusted samples. A gain
+  of exactly 1.0 adds no filter at all, so the default command line is
+  unchanged from version 0.3. The original mixes at the device level.
+- **Second clip length.** A second, usually longer length with its own global
+  shortcut. The segment ring keeps the longer of the two lengths, so a short
+  clip never loses its buffer to the long one.
+- **Free space.** Before a recording starts, and every ten seconds while it
+  runs, the free space of the clip folder's volume is checked
+  (`GetDiskFreeSpaceExW`). Below the configured reserve the recording is ended
+  the normal way, so a full-session video is still written. The original has
+  its own storage manager; the reserve and the optional folder cap here are
+  local policy.
+- **Folder cap.** When a size limit is set, the oldest clips are deleted until
+  the folder fits again. Deletion is permanent, because the recycle bin would
+  not free the space, and the newest clip is never deleted, so a limit smaller
+  than a single clip cannot empty the folder.
+- **Automatic restart.** An FFmpeg process that exits on its own, for example
+  when a game changes the display mode and Desktop Duplication fails, is
+  started again with the same configuration, at most three times in five
+  minutes. The buffered seconds are lost. With full-session mode the restart is
+  skipped so the segments stay available for recovery.

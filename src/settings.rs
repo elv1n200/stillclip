@@ -93,6 +93,14 @@ impl EncoderChoice {
     }
 }
 
+/// Highest loudness the UI offers, in percent.
+pub const MAX_VOLUME: u32 = 200;
+
+/// Percent to an FFmpeg `volume` factor.
+pub fn gain(percent: u32) -> f32 {
+    percent.min(MAX_VOLUME) as f32 / 100.0
+}
+
 /// A global keyboard shortcut. `key` is a stable name such as `F8`, `K` or `Num5`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -315,14 +323,28 @@ pub struct Settings {
     /// Display device name such as `\\.\DISPLAY2`; empty selects the primary display.
     pub display: String,
     pub show_cursor: bool,
+    /// Record the display the detected game runs on instead of the fixed choice.
+    pub follow_game_display: bool,
     pub system_audio: bool,
     pub microphone: bool,
     /// WASAPI endpoint id; empty uses the default capture device.
     pub microphone_device: String,
+    /// Loudness of the system mix in percent; 100 keeps the original level.
+    pub system_volume: u32,
+    /// Loudness of the microphone in percent; 100 keeps the original level.
+    pub microphone_volume: u32,
+    /// A second, usually longer clip length; 0 switches it off.
+    pub replay_seconds_long: u32,
     /// Keep every segment and save the whole session as one video on stop.
     pub keep_full_session: bool,
+    /// Stop recording while less than this many gigabytes are free; 0 switches it off.
+    pub min_free_gb: u32,
+    /// Delete the oldest clips above this folder size in gigabytes; 0 switches it off.
+    pub storage_limit_gb: u32,
     #[serde(deserialize_with = "lenient")]
     pub hotkey_replay: Hotkey,
+    #[serde(deserialize_with = "lenient")]
+    pub hotkey_replay_long: Hotkey,
     #[serde(deserialize_with = "lenient")]
     pub hotkey_record: Hotkey,
     pub close_to_tray: bool,
@@ -350,11 +372,18 @@ impl Default for Settings {
             encoder: EncoderChoice::Auto,
             display: String::new(),
             show_cursor: false,
+            follow_game_display: true,
             system_audio: true,
             microphone: false,
             microphone_device: String::new(),
+            system_volume: 100,
+            microphone_volume: 100,
+            replay_seconds_long: 0,
             keep_full_session: false,
+            min_free_gb: 5,
+            storage_limit_gb: 0,
             hotkey_replay: Hotkey::key("F8"),
+            hotkey_replay_long: Hotkey::none(),
             hotkey_record: Hotkey::none(),
             close_to_tray: true,
             record_on_launch: false,
@@ -377,10 +406,24 @@ impl Settings {
             self.clips_dir = Settings::default().clips_dir;
         }
         self.replay_seconds = mechanics::replay_seconds(u64::from(self.replay_seconds));
+        if self.replay_seconds_long > 0 {
+            self.replay_seconds_long = mechanics::replay_seconds(u64::from(self.replay_seconds_long));
+        }
         self.fps = mechanics::fps(u64::from(self.fps));
+        self.system_volume = self.system_volume.min(MAX_VOLUME);
+        self.microphone_volume = self.microphone_volume.min(MAX_VOLUME);
+        self.min_free_gb = self.min_free_gb.min(1024);
+        self.storage_limit_gb = self.storage_limit_gb.min(100_000);
         self.hotkey_replay = self.hotkey_replay.normalized();
+        self.hotkey_replay_long = self.hotkey_replay_long.normalized();
         self.hotkey_record = self.hotkey_record.normalized();
-        if self.hotkey_replay.is_set() && self.hotkey_replay == self.hotkey_record {
+        // Every shortcut must stay unique; later ones give way to earlier ones.
+        if self.hotkey_replay.is_set() && self.hotkey_replay == self.hotkey_replay_long {
+            self.hotkey_replay_long = Hotkey::none();
+        }
+        if self.hotkey_record.is_set()
+            && (self.hotkey_record == self.hotkey_replay || self.hotkey_record == self.hotkey_replay_long)
+        {
             self.hotkey_record = Hotkey::none();
         }
         let mut games: Vec<GameEntry> = Vec::new();
@@ -392,6 +435,21 @@ impl Settings {
         }
         self.custom_games = games;
         self
+    }
+
+    /// Seconds the segment ring has to hold: the longest clip length in use.
+    pub fn buffer_seconds(&self) -> u32 {
+        self.replay_seconds.max(self.replay_seconds_long)
+    }
+
+    /// Free space the recorder insists on, in bytes.
+    pub fn min_free_bytes(&self) -> u64 {
+        u64::from(self.min_free_gb) * 1024 * 1024 * 1024
+    }
+
+    /// Size the clip folder may reach before old clips go, in bytes.
+    pub fn storage_limit_bytes(&self) -> u64 {
+        u64::from(self.storage_limit_gb) * 1024 * 1024 * 1024
     }
 
     /// Every executable the watcher should react to.
@@ -568,6 +626,49 @@ mod tests {
         let mut settings = Settings::default();
         settings.hotkey_record = Hotkey::key("F8");
         assert!(!settings.sanitized().hotkey_record.is_set());
+    }
+
+    #[test]
+    fn loudness_lengths_and_limits_are_clamped() {
+        let defaults = Settings::default();
+        assert_eq!(defaults.system_volume, 100);
+        assert_eq!(defaults.microphone_volume, 100);
+        assert_eq!(defaults.replay_seconds_long, 0);
+        assert_eq!(defaults.min_free_gb, 5);
+        assert_eq!(defaults.storage_limit_gb, 0);
+        assert!(defaults.follow_game_display);
+        assert_eq!(gain(100), 1.0);
+        assert_eq!(gain(0), 0.0);
+        assert_eq!(gain(900), 2.0);
+
+        let mut settings = Settings::default();
+        settings.system_volume = 5_000;
+        settings.microphone_volume = 150;
+        settings.replay_seconds_long = 99_999;
+        settings.min_free_gb = 9_999;
+        let settings = settings.sanitized();
+        assert_eq!(settings.system_volume, MAX_VOLUME);
+        assert_eq!(settings.microphone_volume, 150);
+        assert_eq!(settings.replay_seconds_long, 1200);
+        assert_eq!(settings.min_free_gb, 1024);
+        // The ring has to hold the longer of the two clip lengths.
+        assert_eq!(settings.buffer_seconds(), 1200);
+        assert_eq!(settings.min_free_bytes(), 1024 * 1024 * 1024 * 1024);
+
+        // A length of zero switches the second clip off and stays off.
+        let mut off = Settings::default();
+        off.replay_seconds_long = 0;
+        assert_eq!(off.sanitized().replay_seconds_long, 0);
+        assert_eq!(Settings::default().buffer_seconds(), 30);
+
+        // No shortcut may be claimed twice.
+        let mut clashing = Settings::default();
+        clashing.hotkey_replay_long = Hotkey::key("F8");
+        clashing.hotkey_record = Hotkey::key("F8");
+        let clashing = clashing.sanitized();
+        assert_eq!(clashing.hotkey_replay.key, "F8");
+        assert!(!clashing.hotkey_replay_long.is_set());
+        assert!(!clashing.hotkey_record.is_set());
     }
 
     #[test]

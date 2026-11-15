@@ -415,6 +415,8 @@ pub struct AudioInput {
     pub sample_format: &'static str,
     pub rate: u32,
     pub channels: u16,
+    /// Loudness factor; 1.0 passes the samples through unchanged.
+    pub gain: f32,
 }
 
 pub struct CaptureRequest<'a> {
@@ -481,6 +483,63 @@ pub fn encoder_args(command: &mut Command, encoder: Encoder, rates: &CaptureEnco
         .arg(rates.gop_frames.to_string());
 }
 
+/// A gain that differs enough from unity to be worth a filter.
+fn adjusted(gain: f32) -> bool {
+    (gain - 1.0).abs() > 0.005
+}
+
+/// Maps the audio inputs: loudness per source, one mixed track, and the
+/// microphone as a second track when that is switched on.
+fn audio_mapping(command: &mut Command, request: &CaptureRequest) {
+    let count = request.audio.len();
+    if count == 0 {
+        command.arg("-an");
+        return;
+    }
+    if count == 1 {
+        command.args(["-map", "1:a:0"]);
+        let gain = request.audio[0].gain;
+        if adjusted(gain) {
+            command.arg("-af").arg(format!("volume={gain:.3}"));
+        }
+        return;
+    }
+    let mut chains: Vec<String> = Vec::new();
+    let mut mix: Vec<String> = Vec::new();
+    let mut microphone = None;
+    for (position, input) in request.audio.iter().enumerate() {
+        let index = position + 1;
+        let mut filters: Vec<String> = Vec::new();
+        if adjusted(input.gain) {
+            filters.push(format!("volume={:.3}", input.gain));
+        }
+        // The last input is the microphone; splitting it keeps the mix intact
+        // while the same samples also become their own track.
+        if request.separate_microphone && index == count {
+            filters.push("asplit=2".into());
+            chains.push(format!("[{index}:a]{}[m{index}][mic]", filters.join(",")));
+            mix.push(format!("[m{index}]"));
+            microphone = Some("[mic]".to_owned());
+        } else if filters.is_empty() {
+            mix.push(format!("[{index}:a]"));
+        } else {
+            chains.push(format!("[{index}:a]{}[g{index}]", filters.join(",")));
+            mix.push(format!("[g{index}]"));
+        }
+    }
+    chains.push(format!(
+        "{}amix=inputs={count}:duration=longest:dropout_transition=0:normalize=0[a]",
+        mix.join("")
+    ));
+    command
+        .arg("-filter_complex")
+        .arg(chains.join(";"))
+        .args(["-map", "[a]"]);
+    if let Some(track) = microphone {
+        command.arg("-map").arg(track);
+    }
+}
+
 /// Builds the complete FFmpeg command for one capture attempt.
 pub fn build_command(ffmpeg: &Path, request: &CaptureRequest) -> Command {
     let display = request.display;
@@ -542,26 +601,7 @@ pub fn build_command(ffmpeg: &Path, request: &CaptureRequest) -> Command {
         command.arg("-vf").arg(format!("scale={width}:{height}"));
     }
     command.args(["-map", "0:v:0"]);
-    match request.audio.len() {
-        0 => {
-            command.arg("-an");
-        }
-        1 => {
-            command.args(["-map", "1:a:0"]);
-        }
-        n => {
-            let inputs: String = (1..=n).map(|i| format!("[{i}:a]")).collect();
-            command
-                .arg("-filter_complex")
-                .arg(format!(
-                    "{inputs}amix=inputs={n}:duration=longest:dropout_transition=0:normalize=0[a]"
-                ))
-                .args(["-map", "[a]"]);
-            if request.separate_microphone {
-                command.arg("-map").arg(format!("{n}:a:0"));
-            }
-        }
-    }
+    audio_mapping(&mut command, request);
     encoder_args(&mut command, request.strategy.encoder, &rates, hardware_frames);
     command.args(["-fps_mode", "cfr"]);
     if !request.audio.is_empty() {
@@ -645,6 +685,62 @@ mod tests {
             .all(|s| s.source == VideoSource::Gdigrab));
     }
 
+    fn pipe(name: &str, gain: f32) -> AudioInput {
+        AudioInput {
+            path: format!("\\\\.\\pipe\\{name}"),
+            sample_format: "f32le",
+            rate: 48000,
+            channels: 2,
+            gain,
+        }
+    }
+
+    fn audio_line(audio: &[AudioInput], separate_microphone: bool) -> String {
+        let display = display();
+        let strategy = Strategy {
+            source: VideoSource::Ddagrab { output_idx: 0 },
+            encoder: Encoder::Nvenc,
+        };
+        let command = build_command(
+            Path::new("ffmpeg"),
+            &CaptureRequest {
+                display: &display,
+                strategy: &strategy,
+                fps: 60,
+                quality: Quality::P720,
+                show_cursor: false,
+                audio,
+                separate_microphone,
+                segment_dir: Path::new("buffer"),
+                list_path: Path::new("buffer/segments.csv"),
+            },
+        );
+        describe(&command)
+    }
+
+    #[test]
+    fn loudness_is_applied_per_source() {
+        // One source: a plain audio filter is enough.
+        let text = audio_line(&[pipe("a", 0.5)], false);
+        assert!(text.contains("-map 1:a:0 -af volume=0.500"), "{text}");
+        assert!(!text.contains("filter_complex"), "{text}");
+        // Unity gain stays out of the command line entirely.
+        let text = audio_line(&[pipe("a", 1.0), pipe("b", 1.0)], false);
+        assert!(text.contains("-filter_complex [1:a][2:a]amix=inputs=2"), "{text}");
+        assert!(!text.contains("volume="), "{text}");
+        // System quieter, microphone louder, both mixed into one track.
+        let text = audio_line(&[pipe("a", 0.8), pipe("b", 1.5)], false);
+        assert!(
+            text.contains("-filter_complex [1:a]volume=0.800[g1];[2:a]volume=1.500[g2];[g1][g2]amix=inputs=2"),
+            "{text}"
+        );
+        // The microphone keeps its loudness on its own track as well.
+        let text = audio_line(&[pipe("a", 1.0), pipe("b", 1.5)], true);
+        assert!(text.contains("[2:a]volume=1.500,asplit=2[m2][mic]"), "{text}");
+        assert!(text.contains("[1:a][m2]amix=inputs=2"), "{text}");
+        assert!(text.contains("-map [a] -map [mic]"), "{text}");
+    }
+
     #[test]
     fn output_size_follows_quality() {
         assert_eq!(output_size(&display(), Quality::P720), (1280, 720));
@@ -670,12 +766,14 @@ mod tests {
                 sample_format: "f32le",
                 rate: 48000,
                 channels: 2,
+                gain: 1.0,
             },
             AudioInput {
                 path: "\\\\.\\pipe\\b".into(),
                 sample_format: "f32le",
                 rate: 48000,
                 channels: 2,
+                gain: 1.0,
             },
         ];
         let command = build_command(
@@ -693,7 +791,8 @@ mod tests {
             },
         );
         let text = describe(&command);
-        assert!(text.contains("-map [a] -map 2:a:0"), "{text}");
+        assert!(text.contains("-map [a] -map [mic]"), "{text}");
+        assert!(text.contains("[2:a]asplit=2[m2][mic]"), "{text}");
         assert!(text.contains("ddagrab=output_idx=0:framerate=60:draw_mouse=0,hwdownload,format=bgra,scale=1280:720"));
         assert!(text.contains("amix=inputs=2"));
         assert!(text.contains("-c:v h264_nvenc"));

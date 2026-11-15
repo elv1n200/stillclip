@@ -25,6 +25,31 @@ fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
+/// Free bytes on the volume that holds `path`, for the current user's quota.
+/// Walks up to the nearest existing folder, so a clip folder that does not
+/// exist yet still reports its drive.
+pub fn free_bytes(path: &Path) -> Option<u64> {
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let mut candidate = Some(path);
+    while let Some(current) = candidate {
+        if current.is_dir() {
+            let wide = wide_path(current);
+            let mut free = 0_u64;
+            let ok = unsafe {
+                GetDiskFreeSpaceExW(
+                    wide.as_ptr(),
+                    &mut free,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            return (ok != 0).then_some(free);
+        }
+        candidate = current.parent();
+    }
+    None
+}
+
 pub fn pick_file(owner: isize, executable: bool) -> Option<PathBuf> {
     let mut filename = vec![0u16; 32768];
     let filter = wide(if executable {
