@@ -8,9 +8,11 @@
     show_cursor: false, follow_game_display: true,
     system_audio: true, microphone: false, microphone_device: '',
     system_volume: 100, microphone_volume: 100,
-    replay_seconds_long: 0, keep_full_session: false, min_free_gb: 5, storage_limit_gb: 0,
+    replay_seconds_long: 0, marker_before: 20, marker_after: 10,
+    keep_full_session: false, min_free_gb: 5, storage_limit_gb: 0,
     hotkey_replay: { ctrl: false, alt: false, shift: false, win: false, key: 'F8' },
     hotkey_replay_long: { ctrl: false, alt: false, shift: false, win: false, key: '' },
+    hotkey_marker: { ctrl: false, alt: false, shift: false, win: false, key: '' },
     hotkey_record: { ctrl: false, alt: false, shift: false, win: false, key: '' },
     close_to_tray: true, record_on_launch: false, start_minimized: false,
     microphone_separate_track: false, precise_clips: false, clip_sound: true, overlay_notifications: true,
@@ -21,17 +23,18 @@
     ffmpeg_available: false, ffmpeg_path: null, clips_dir: '', settings: { ...defaultSettings }, autostart: false,
     displays: [], microphones: [], default_output: null,
     capabilities: { probed: false, ddagrab: false, encoders: [] }, encoders: [], selected_encoder: '',
-    session: null, buffer_bytes: 0, free_bytes: 0, clips_bytes: 0, max_volume: 200,
+    session: null, markers: [], buffer_bytes: 0, free_bytes: 0, clips_bytes: 0, max_volume: 200,
     notice: { sequence: 0, text: '', error: false, clip: null },
     replay_presets: [15, 30, 60, 120, 180, 300], replay_min: 15, replay_max: 1200,
     editor_min_seconds: 2, editor_tolerance: 0.000001, fps_choices: [24, 30, 60, 120, 144],
-    hotkeys: { replay: 'F8', replay_long: 'Nicht belegt', record: 'Nicht belegt', failed: [] },
+    hotkeys: { replay: 'F8', replay_long: 'Nicht belegt', marker: 'Nicht belegt', record: 'Nicht belegt', failed: [] },
     tray: false, version: '', recovered: null,
     active_game: null, active_game_display: null, capture_display: null,
     auto_started: false, apps: [], builtin_games: [],
   };
   let loaded = false;
   let clipSignature = '';
+  let markerSignature = '';
   let lastNotice = 0;
   let highlightId = null;
   let draft = null;           // unsaved settings copy
@@ -113,6 +116,7 @@
     parts.push(hotkey.key);
     return parts.join(' + ');
   };
+  const clipLength = seconds => (seconds >= 120 ? `${Math.round(seconds / 60)} Min.` : `${seconds} Sek.`);
   const qualityLabel = quality => ({ p720: '720p', p1080: '1080p', p1440: '1440p', native: 'Nativ' }[quality] || quality);
   const currentSettings = () => draft || state.settings;
   const displayFor = name => state.displays.find(d => d.name === name) || state.displays.find(d => d.primary) || state.displays[0];
@@ -323,16 +327,19 @@
     const long = Number(settings.replay_seconds_long) || 0;
     $('replay-long-button').hidden = long <= 0;
     $('replay-long-button').disabled = unavailable || !recording || !state.ffmpeg_available;
-    $('replay-long-button-text').textContent = long >= 120
-      ? `Letzte ${Math.round(long / 60)} Min. sichern`
-      : `Letzte ${long} Sek. sichern`;
+    $('replay-long-button-text').textContent = `Letzte ${clipLength(long)} sichern`;
     $('timer').textContent = clock(state.elapsed);
     $('hotkey-replay-label').textContent = replayLabel;
+    $('mark-button').disabled = unavailable || !recording || !state.ffmpeg_available;
+    renderMarkers();
     const longKey = long > 0 && settings.hotkey_replay_long && settings.hotkey_replay_long.key;
-    $('shortcut-hint').hidden = !settings.hotkey_replay.key && !settings.hotkey_record.key && !longKey;
+    const markKey = settings.hotkey_marker && settings.hotkey_marker.key;
+    $('shortcut-hint').hidden = !settings.hotkey_replay.key && !settings.hotkey_record.key && !longKey && !markKey;
+    $('hotkey-marker-hint').hidden = !markKey;
+    if (markKey) $('hotkey-marker-label').textContent = hotkeyLabel(settings.hotkey_marker);
     $('hotkey-replay-long-hint').hidden = !longKey;
     if (longKey) {
-      $('hotkey-replay-long-seconds').textContent = String(long);
+      $('hotkey-replay-long-seconds').textContent = clipLength(long);
       $('hotkey-replay-long-label').textContent = hotkeyLabel(settings.hotkey_replay_long);
     }
     $('hotkey-record-hint').hidden = !settings.hotkey_record.key;
@@ -373,6 +380,42 @@
     $('side-session-timer').textContent = clock(state.elapsed);
     $('side-hotkey').textContent = replayLabel;
     $('side-session-hint').hidden = !settings.hotkey_replay.key;
+  }
+
+  // Marked moments waiting for their clip. Rebuilt only when something about
+  // them actually changed, so a click never lands on a replaced button.
+  function renderMarkers() {
+    const markers = state.markers || [];
+    const box = $('markers');
+    const blocked = !loaded || state.busy || !state.recording || !state.ffmpeg_available;
+    const signature = JSON.stringify(markers) + blocked;
+    if (signature === markerSignature) return;
+    markerSignature = signature;
+    box.hidden = !markers.length;
+    box.replaceChildren(...markers.map(marker => {
+      // A fresh marker is still being recorded; only one whose window the ring
+      // has already deleted counts as lost.
+      const waiting = !marker.ready;
+      const lost = !waiting && marker.seconds < 1;
+      const row = el('div', 'marker-row' + (lost ? ' lost' : waiting ? ' waiting' : ''));
+      row.append(icon('bookmark'), el('span', 'marker-time', clock(marker.at)));
+      let note = `${marker.wanted} Sek. bereit`;
+      if (lost) note = 'nicht mehr im Puffer';
+      else if (waiting) note = 'wird noch aufgezeichnet …';
+      else if (marker.seconds < marker.wanted) note = `noch ${marker.seconds} Sek. verfügbar`;
+      row.append(el('span', 'marker-note', note));
+      const save = el('button', 'btn btn-quiet', 'Clip sichern');
+      save.disabled = blocked || lost || waiting;
+      save.addEventListener('click', () => ipc('save_marker', { id: marker.id }));
+      const drop = el('button', 'icon-btn');
+      drop.title = 'Markierung verwerfen';
+      drop.setAttribute('aria-label', 'Markierung verwerfen');
+      drop.append(icon('close'));
+      drop.disabled = !loaded || state.busy;
+      drop.addEventListener('click', () => ipc('drop_marker', { id: marker.id }));
+      row.append(save, drop);
+      return row;
+    }));
   }
 
   // -------------------------------------------------------------- settings
@@ -485,6 +528,12 @@
       ? `Eine zweite Taste sichert ${longSeconds} Sekunden. Der Puffer belegt so viel Platz wie diese Länge – etwa ${size(bufferEstimate(settings, longSeconds))}.`
       : `Optional: eine zweite Taste sichert eine längere Spanne, zum Beispiel eine ganze Runde. 0 schaltet sie aus. Erlaubt sind ${state.replay_min} bis ${state.replay_max} Sekunden.`;
 
+    if (document.activeElement !== $('setting-marker-before')) $('setting-marker-before').value = String(settings.marker_before);
+    if (document.activeElement !== $('setting-marker-after')) $('setting-marker-after').value = String(settings.marker_after);
+    const markerKey = settings.hotkey_marker && settings.hotkey_marker.key;
+    $('marker-help').textContent = markerKey
+      ? `${hotkeyLabel(settings.hotkey_marker)} merkt sich die Stelle, der Clip entsteht danach auf Klick: ${settings.marker_before} Sekunden davor, ${settings.marker_after} danach.`
+      : 'Markieren kostet nichts: Stillclip merkt sich nur die Stelle, der Clip entsteht danach auf Klick. Ein Kürzel dafür vergibst du weiter unten.';
     const longInvalid = longSeconds !== 0 && (longSeconds < state.replay_min || longSeconds > state.replay_max);
     $('setting-replay-long').setCustomValidity(longInvalid ? `Bitte 0 oder ${state.replay_min} bis ${state.replay_max} Sekunden.` : '');
     $('hotkey-replay-long-row').hidden = longSeconds <= 0;
@@ -493,6 +542,7 @@
       : 'Sichert die zweite Länge aus dem Bereich Rückblick.';
     if (capturing !== 'replay') $('hotkey-replay').value = settings.hotkey_replay.key ? hotkeyLabel(settings.hotkey_replay) : '';
     if (capturing !== 'replay_long') $('hotkey-replay-long').value = settings.hotkey_replay_long.key ? hotkeyLabel(settings.hotkey_replay_long) : '';
+    if (capturing !== 'marker') $('hotkey-marker').value = settings.hotkey_marker.key ? hotkeyLabel(settings.hotkey_marker) : '';
     if (capturing !== 'record') $('hotkey-record').value = settings.hotkey_record.key ? hotkeyLabel(settings.hotkey_record) : '';
     const failed = state.hotkeys.failed || [];
     $('hotkey-failures').hidden = !failed.length;
@@ -506,7 +556,8 @@
 
     ['setting-display', 'setting-quality', 'setting-fps', 'setting-encoder', 'setting-cursor', 'setting-system-audio', 'setting-microphone', 'setting-microphone-device', 'setting-mic-separate', 'setting-full-session', 'setting-system-volume', 'setting-microphone-volume']
       .forEach(id => { $(id).disabled = recordingLocked; });
-    ['setting-replay', 'setting-replay-custom', 'hotkey-replay', 'hotkey-replay-long', 'hotkey-record', 'setting-close-to-tray', 'setting-record-on-launch', 'setting-start-minimized', 'setting-autostart', 'setting-precise', 'setting-overlay', 'setting-clip-sound', 'setting-auto-games', 'setting-builtin-games', 'app-picker', 'add-running-app', 'refresh-apps', 'pick-game', 'setting-follow-display', 'setting-replay-long', 'setting-min-free', 'setting-storage-limit']
+    ['setting-marker-before', 'setting-marker-after', 'hotkey-marker',
+      'setting-replay', 'setting-replay-custom', 'hotkey-replay', 'hotkey-replay-long', 'hotkey-record', 'setting-close-to-tray', 'setting-record-on-launch', 'setting-start-minimized', 'setting-autostart', 'setting-precise', 'setting-overlay', 'setting-clip-sound', 'setting-auto-games', 'setting-builtin-games', 'app-picker', 'add-running-app', 'refresh-apps', 'pick-game', 'setting-follow-display', 'setting-replay-long', 'setting-min-free', 'setting-storage-limit']
       .forEach(id => { $(id).disabled = locked; });
 
     renderStorage(settings);
@@ -599,6 +650,8 @@
   $('setting-system-volume').addEventListener('input', () => edit(d => { d.system_volume = Number($('setting-system-volume').value); }));
   $('setting-microphone-volume').addEventListener('input', () => edit(d => { d.microphone_volume = Number($('setting-microphone-volume').value); }));
   $('setting-replay-long').addEventListener('input', () => edit(d => { d.replay_seconds_long = Number($('setting-replay-long').value) || 0; }));
+  $('setting-marker-before').addEventListener('input', () => edit(d => { d.marker_before = Number($('setting-marker-before').value) || 0; }));
+  $('setting-marker-after').addEventListener('input', () => edit(d => { d.marker_after = Number($('setting-marker-after').value) || 0; }));
   $('setting-min-free').addEventListener('input', () => edit(d => { d.min_free_gb = Number($('setting-min-free').value) || 0; }));
   $('setting-storage-limit').addEventListener('input', () => edit(d => { d.storage_limit_gb = Number($('setting-storage-limit').value) || 0; }));
   $('setting-full-session').addEventListener('change', () => edit(d => { d.keep_full_session = $('setting-full-session').checked; }));
@@ -653,7 +706,12 @@
     };
     return map[code] || null;
   };
-  const HOTKEY_FIELDS = { replay: 'hotkey_replay', replay_long: 'hotkey_replay_long', record: 'hotkey_record' };
+  const HOTKEY_FIELDS = {
+    replay: 'hotkey_replay',
+    replay_long: 'hotkey_replay_long',
+    marker: 'hotkey_marker',
+    record: 'hotkey_record',
+  };
   function bindHotkeyField(id, field) {
     const key = HOTKEY_FIELDS[field];
     const input = $(id);
@@ -677,9 +735,11 @@
   }
   bindHotkeyField('hotkey-replay', 'replay');
   bindHotkeyField('hotkey-replay-long', 'replay_long');
+  bindHotkeyField('hotkey-marker', 'marker');
   bindHotkeyField('hotkey-record', 'record');
   $('hotkey-replay-clear').addEventListener('click', () => edit(d => { d.hotkey_replay = { ctrl: false, alt: false, shift: false, win: false, key: '' }; }));
   $('hotkey-replay-long-clear').addEventListener('click', () => edit(d => { d.hotkey_replay_long = { ctrl: false, alt: false, shift: false, win: false, key: '' }; }));
+  $('hotkey-marker-clear').addEventListener('click', () => edit(d => { d.hotkey_marker = { ctrl: false, alt: false, shift: false, win: false, key: '' }; }));
   $('hotkey-record-clear').addEventListener('click', () => edit(d => { d.hotkey_record = { ctrl: false, alt: false, shift: false, win: false, key: '' }; }));
 
   // ---------------------------------------------------------------- editor
@@ -959,6 +1019,7 @@
   $('record-button').addEventListener('click', () => ipc(state.recording ? 'stop' : 'start'));
   $('replay-button').addEventListener('click', () => ipc('replay'));
   $('replay-long-button').addEventListener('click', () => ipc('replay_long'));
+  $('mark-button').addEventListener('click', () => ipc('mark'));
   window.addEventListener('focus', () => { if (loaded && !state.busy) ipc('refresh'); });
 
   // Used by the automated screenshot check to render other views. A page may

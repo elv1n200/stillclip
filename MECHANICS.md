@@ -252,3 +252,22 @@ extra-duration padding is still documented but not applied.
   started again with the same configuration, at most three times in five
   minutes. The buffered seconds are lost. With full-session mode the restart is
   skipped so the segments stay available for recovery.
+
+## Version 0.5: marked moments (2026-11-15)
+
+- **Marking.** A global shortcut only records where in the running session
+  something happened: the elapsed seconds and the clip name. Nothing is written
+  and the capture is untouched, so marking costs nothing mid-game. The original
+  has no comparable feature; this is a local addition.
+- **Saving a marked moment.** The clip is cut out of the ring by CSV timeline
+  (`export_span`), not from the end like a replay: the segments overlapping
+  `[mark - before, mark + after]` are concatenated, `-ss` seeks to the keyframe
+  at or before the start and `-t` ends the clip exactly where it was asked to.
+  The clip may therefore begin a frame or two early, never late, which matches
+  how `min(available, requested)` behaves for replays.
+- **Availability.** A marked moment is only offered once its whole window is in
+  finished segments, and the list shows how much of the window the ring still
+  holds, since the buffer keeps deleting from the front. The retention window
+  therefore counts `before + after` alongside the two clip lengths.
+- **Lifetime.** Markers belong to the session that produced them and are
+  dropped when it ends, because the segments behind them are gone.

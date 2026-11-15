@@ -245,6 +245,16 @@ select:focus { border-color: #73638d; }
 .input-short { width: 130px; }
 .hotkey-wrap { display: flex; gap: 6px; align-items: center; }
 .unit-wrap { display: inline-flex; gap: 8px; align-items: center; }
+.input-tiny { width: 76px; text-align: center; }
+.markers { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; max-width: 520px; }
+.marker-row { display: flex; align-items: center; gap: 10px; border: 1px solid #33323d; background: #16161c; border-radius: 8px; padding: 7px 8px 7px 12px; font-size: 11px; color: #c7c1d4; }
+.marker-row svg { width: 14px; height: 14px; color: var(--accent); flex-shrink: 0; }
+.marker-time { font-variant-numeric: tabular-nums; font-family: "Cascadia Mono", Consolas, monospace; }
+.marker-note { color: #7e7b8d; flex: 1; }
+.marker-row.waiting .marker-note { color: #d3b68b; }
+.marker-row.lost { border-style: dashed; color: #8d8c9a; }
+.marker-row.lost svg { color: #6a6878; }
+.marker-row .btn { padding: 5px 10px; height: auto; font-size: 11px; }
 .unit { font-size: 11px; color: #7e7b8d; white-space: nowrap; }
 .volume-wrap { display: inline-flex; gap: 10px; align-items: center; }
 .volume-value { font-size: 11px; color: #a7a0b5; width: 42px; text-align: right; font-variant-numeric: tabular-nums; }

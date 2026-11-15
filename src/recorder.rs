@@ -661,6 +661,86 @@ impl Recorder {
         }
     }
 
+    /// Seconds of finished video the buffer currently holds, as `(from, to)`
+    /// on the session timeline. The UI uses it to tell whether a marked moment
+    /// can still be saved before the ring deletes it.
+    pub fn buffered_span(&self) -> Option<(f64, f64)> {
+        let session = self.session.as_ref()?;
+        let segments = parse_segment_list(
+            &fs::read_to_string(&session.list_path).unwrap_or_default(),
+            &session.dir,
+        );
+        let from = segments.iter().filter_map(|s| s.start).fold(f64::INFINITY, f64::min);
+        let to = segments.iter().filter_map(|s| s.end).fold(f64::NEG_INFINITY, f64::max);
+        (from.is_finite() && to > from).then_some((from, to))
+    }
+
+    /// Saves the window around a marked moment. `at` is seconds since this
+    /// session started; `before` and `after` extend the clip on both sides.
+    /// The recording keeps running, and nothing is re-encoded unless exact
+    /// clips are switched on.
+    pub fn save_marker(
+        &mut self,
+        at: f64,
+        before: f64,
+        after: f64,
+        prefix: &str,
+    ) -> Result<PathBuf, String> {
+        let session = self.session.as_mut().ok_or("Starte zuerst eine Aufnahme.")?;
+        if session
+            .last_clip
+            .is_some_and(|at| at.elapsed() < CLIP_COOLDOWN)
+        {
+            return Err("Der letzte Clip wurde gerade erst gesichert.".into());
+        }
+        let segments = scan_segments(&session.dir, &session.list_path);
+        let earliest = segments.iter().filter_map(|s| s.start).fold(f64::INFINITY, f64::min);
+        let latest = segments.iter().filter_map(|s| s.end).fold(f64::NEG_INFINITY, f64::max);
+        if !earliest.is_finite() || latest <= earliest {
+            return Err("Es liegen noch keine fertigen Videodaten vor. Warte einen Moment.".into());
+        }
+        if at + after > latest + 0.001 {
+            return Err("Der Moment ist noch nicht vollständig aufgezeichnet. Warte einen Moment.".into());
+        }
+        let from = (at - before).max(earliest);
+        let to = (at + after).min(latest);
+        if to - from < 0.5 {
+            return Err("Die Markierung liegt nicht mehr im Puffer.".into());
+        }
+        let chosen = span_segments(&segments, from, to);
+        if chosen.is_empty() {
+            return Err("Die Markierung liegt nicht mehr im Puffer.".into());
+        }
+        let gop = 0.4_f64.max(f64::from(session.fps.max(1)).recip() * 4.0);
+        let output = clip_path(&session.clips_dir, &sanitize_prefix(prefix));
+        let export = export_span(
+            &self.ffmpeg,
+            self.ffprobe.as_deref(),
+            &chosen,
+            from,
+            to,
+            gop,
+            &output,
+        )
+        .and_then(|()| {
+            if session.precise {
+                trim_to_exact_length(&self.ffmpeg, &output, to - from, session.encoder, &session.rates)
+            } else {
+                Ok(())
+            }
+        });
+        match export {
+            Ok(()) => {
+                session.last_clip = Some(Instant::now());
+                Ok(output)
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&output);
+                Err(error)
+            }
+        }
+    }
+
     fn export_all(&self, segments: &[Segment], output: &Path) -> Result<(), String> {
         let dir = segments[0]
             .path
@@ -808,6 +888,103 @@ fn keyframes(ffprobe: &Path, path: &Path) -> Vec<f64> {
 }
 
 /// Cuts the newest `seconds` out of `segments` into an MP4 without re-encoding.
+/// Segments that overlap `[from, to]` on the CSV timeline. Only finished
+/// segments take part: a marker is clipped once its whole window is written.
+pub fn span_segments(segments: &[Segment], from: f64, to: f64) -> Vec<Segment> {
+    segments
+        .iter()
+        .filter(|segment| match (segment.start, segment.end) {
+            (Some(start), Some(end)) => end > from + 0.001 && start < to - 0.001,
+            _ => false,
+        })
+        .cloned()
+        .collect()
+}
+
+/// Cuts `[from, to]` of the buffered timeline into an MP4 without re-encoding.
+/// Both bounds are seconds on the CSV timeline. The cut moves back to the
+/// keyframe at or before `from`, so the clip may start a little earlier but
+/// never ends early.
+fn export_span(
+    ffmpeg: &Path,
+    ffprobe: Option<&Path>,
+    segments: &[Segment],
+    from: f64,
+    to: f64,
+    gop: f64,
+    output: &Path,
+) -> Result<(), String> {
+    let first = segments.first().ok_or("Keine Segmente zum Sichern vorhanden.")?;
+    let dir = first.path.parent().ok_or("Der Pufferordner fehlt.")?;
+    if to <= from {
+        return Err("Der gewünschte Ausschnitt ist leer.".into());
+    }
+    // The concat input keeps the recording's own timestamps, so every offset is
+    // measured from the first chosen segment's start.
+    let base = first.start.unwrap_or(0.0);
+    let mut cut = (from - base).max(0.0);
+    if let Some(ffprobe) = ffprobe {
+        if let Some(first_range) = probe_range(ffprobe, &first.path) {
+            let target = first_range.start + cut;
+            let mut starts = Vec::with_capacity(segments.len());
+            let mut previous_end = base;
+            for segment in segments {
+                let csv_start = segment.start.unwrap_or(previous_end);
+                starts.push(first_range.start + (csv_start - base));
+                previous_end = segment.end.unwrap_or(csv_start);
+            }
+            let containing = starts.iter().rposition(|start| *start <= target).unwrap_or(0);
+            let key = keyframes(ffprobe, &segments[containing].path)
+                .into_iter()
+                .filter(|key| *key <= target + 0.0005)
+                .fold(None, |best: Option<f64>, key| Some(best.map_or(key, |b| b.max(key))))
+                .unwrap_or_else(|| starts[containing].max(first_range.start));
+            cut = (key - first_range.start).max(0.0);
+        }
+    } else {
+        // Without ffprobe begin a keyframe distance earlier instead of guessing.
+        cut = (cut - gop).max(0.0);
+    }
+    let length = (to - base) - cut;
+    if length < 0.2 {
+        return Err("Der gewünschte Ausschnitt ist zu kurz.".into());
+    }
+    let input = format!(
+        "concat:{}",
+        segments
+            .iter()
+            .map(|s| s.path.file_name().unwrap_or_default().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("|")
+    );
+    let mut export = command(ffmpeg);
+    export
+        .current_dir(dir)
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"]);
+    if cut > 0.05 {
+        export.arg("-ss").arg(format!("{cut:.6}"));
+    }
+    let result = export
+        .args(["-i", &input, "-t"])
+        .arg(format!("{length:.6}"))
+        .args([
+            "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", "-f", "mp4",
+        ])
+        .arg(output)
+        .output()
+        .map_err(|error| format!("Der Clip konnte nicht gespeichert werden: {error}"))?;
+    if !result.status.success() {
+        return Err(format!(
+            "Der Clip konnte nicht gespeichert werden. {}",
+            diagnostic(&result.stderr)
+        ));
+    }
+    if fs::metadata(output).map_or(true, |metadata| metadata.len() == 0) {
+        return Err("Der Clip enthält keine Videodaten.".into());
+    }
+    Ok(())
+}
+
 fn export_tail(
     ffmpeg: &Path,
     ffprobe: Option<&Path>,
@@ -1671,6 +1848,120 @@ capabilities {capabilities:?}");
         recorder.export_all(&segments, &full).unwrap();
         let full_info = probe_media(&ffmpeg, &full).unwrap();
         assert!((full_info.duration - 12.5).abs() < 0.3, "{}", full_info.duration);
+
+        // A marked moment at 7.0 s with four seconds before and two after:
+        // the window has to land in the middle of the recording, not at its end.
+        let window = span_segments(&segments, 3.0, 9.0);
+        assert!(!window.is_empty(), "{segments:?}");
+        let marked = dir.join("marker.mp4");
+        export_span(&ffmpeg, ffprobe.as_deref(), &window, 3.0, 9.0, 0.4, &marked).unwrap();
+        let marked_info = probe_media(&ffmpeg, &marked).unwrap();
+        assert!(marked_info.audio);
+        assert!(
+            (6.0..=6.6).contains(&marked_info.duration),
+            "the marked window should be about six seconds, got {}",
+            marked_info.duration
+        );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Records for a while and cuts the clip for a marked moment out of the
+    /// middle of the buffer. `STILLCLIP_SYNC_DISPLAY=DISPLAY2` picks a screen.
+    /// Run explicitly: `cargo test marker_capture -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "records the developer's own screen for half a minute"]
+    fn marker_capture() {
+        let ffmpeg = find_ffmpeg().expect("local FFmpeg is required");
+        let dir = env::temp_dir().join(format!("stillclip-marker-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let displays = capture::displays();
+        let wanted = env::var("STILLCLIP_SYNC_DISPLAY").unwrap_or_default();
+        let display = displays
+            .iter()
+            .find(|d| !wanted.is_empty() && d.name.contains(&wanted))
+            .or_else(|| capture::choose_display(&displays, ""))
+            .expect("a display")
+            .clone();
+        eprintln!("display {}", display.name);
+        let capabilities = capture::probe_capabilities(&ffmpeg, &dir);
+        let mut recorder = Recorder::new(ffmpeg.clone());
+        recorder
+            .start(SessionConfig {
+                display,
+                encoder: capture::select_encoder(
+                    crate::settings::EncoderChoice::Auto,
+                    &capabilities.encoders,
+                ),
+                capabilities,
+                fps: 60,
+                quality: Quality::P720,
+                show_cursor: false,
+                system_audio: true,
+                microphone: None,
+                microphone_separate_track: false,
+                system_gain: 1.0,
+                microphone_gain: 1.0,
+                replay_seconds: 60,
+                keep_full_session: false,
+                min_free_bytes: 0,
+                precise_clips: false,
+                clips_dir: dir.clone(),
+            })
+            .unwrap();
+        thread::sleep(Duration::from_secs(24));
+        // Too early: the window reaches past what has been written.
+        assert!(recorder.save_marker(30.0, 6.0, 4.0, "Zukunft").is_err());
+        let (from, to) = recorder.buffered_span().expect("buffered span");
+        eprintln!("buffered {from:.1}..{to:.1}");
+        assert!(from < 1.0 && to > 15.0, "{from} {to}");
+        let clip = recorder.save_marker(12.0, 6.0, 4.0, "Markierung").unwrap();
+        let info = probe_media(&ffmpeg, &clip).unwrap();
+        eprintln!("clip {clip:?} {info:?}");
+        assert!(info.audio, "a marked moment keeps the sound");
+        assert_eq!((info.width, info.height), (1280, 720));
+        assert!(
+            (10.0..=10.6).contains(&info.duration),
+            "ten seconds around the mark, got {}",
+            info.duration
+        );
+        recorder.stop().unwrap();
+        assert!(!buffer_dir(&dir).exists(), "buffer must be cleaned up");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn marked_windows_pick_the_overlapping_segments() {
+        let dir = Path::new("buffer");
+        let segment = |index: u64, start: f64, end: f64| Segment {
+            index,
+            path: dir.join(format!("seg-{index:06}.ts")),
+            start: Some(start),
+            end: Some(end),
+        };
+        let mut segments = vec![
+            segment(0, 0.0, 5.0),
+            segment(1, 5.0, 10.0),
+            segment(2, 10.0, 15.0),
+        ];
+        // An unfinished segment has no times yet and never takes part.
+        segments.push(Segment {
+            index: 3,
+            path: dir.join("seg-000003.ts"),
+            start: None,
+            end: None,
+        });
+        let indexes = |from, to| {
+            span_segments(&segments, from, to)
+                .iter()
+                .map(|s| s.index)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(indexes(6.0, 9.0), [1]);
+        assert_eq!(indexes(3.0, 12.0), [0, 1, 2]);
+        assert_eq!(indexes(0.0, 15.0), [0, 1, 2]);
+        // Exactly on a boundary the neighbour stays out.
+        assert_eq!(indexes(5.0, 10.0), [1]);
+        assert!(indexes(20.0, 25.0).is_empty());
     }
 }

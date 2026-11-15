@@ -35,6 +35,11 @@ vorhandene `ffmpeg.exe`.
 - **Zwei Längen.** Neben der normalen Cliplänge lässt sich eine zweite,
   längere einstellen – mit eigener Taste, zum Beispiel 30 Sekunden für den
   Treffer und fünf Minuten für die ganze Runde.
+- **Markieren statt entscheiden.** Eine Taste merkt sich die Stelle, ohne die
+  Aufnahme zu stören und ohne eine Datei zu schreiben. Später, in der Pause
+  oder nach der Runde, wird daraus mit einem Klick ein Clip – mit frei
+  wählbarem Vorlauf und Nachlauf. Stillclip zeigt zu jeder Markierung, ob der
+  Moment noch vollständig im Puffer liegt.
 - **Ton.** Systemton (WASAPI-Loopback des Standard-Wiedergabegeräts) und
   wahlweise ein Mikrofon werden in den Clip gemischt, jeweils mit eigener
   Lautstärke von 0 bis 200 Prozent. Wechselt das Wiedergabegerät mitten in der
@@ -81,6 +86,8 @@ vorhandene `ffmpeg.exe`.
    hinzufügen.
 4. Mit **F8** (oder dem eigenen Kürzel) beziehungsweise **Letzte … Sek. sichern**
    landet der Moment als Clip in der Bibliothek; Banner und Ton bestätigen das.
+   Wer im Spiel nicht entscheiden will, drückt die Markieren-Taste und sichert
+   den Clip später im Fenster unter **Markieren**.
 5. **Aufnahme beenden** stoppt den Rückblick. Nur mit der Option „Ganze Sitzung
    behalten“ entsteht dabei zusätzlich ein Video `Aufnahme ….mp4`.
 6. Einen Clip anklicken, um ihn abzuspielen, zuzuschneiden, umzubenennen oder
@@ -100,8 +107,8 @@ und wird danach entfernt.
 | Spiele | Automatisch aufnehmen, eingebaute Spieleliste, eigene Spiele und Programme |
 | Aufnahme | Bildschirm, Bildschirm des Spiels verwenden, Qualität (720p/1080p/1440p/nativ), Bildrate, Encoder (automatisch/NVENC/AMF/QSV/CPU), Mauszeiger |
 | Ton | Systemton, Lautstärke Systemton, Mikrofon, Mikrofongerät, Lautstärke Mikrofon, Mikrofon als eigene Spur |
-| Rückblick | 15, 30, 60, 120, 180, 300 Sekunden oder eigene Länge (15–1200 s), zweite Länge, exakte Cliplänge, ganze Sitzung behalten |
-| Tastenkürzel | Moment sichern, längeren Moment sichern, Aufnahme starten/beenden (mit Strg/Alt/Umschalt/Win) |
+| Rückblick | 15, 30, 60, 120, 180, 300 Sekunden oder eigene Länge (15–1200 s), Vorlauf und Nachlauf markierter Momente, zweite Länge, exakte Cliplänge, ganze Sitzung behalten |
+| Tastenkürzel | Moment sichern, längeren Moment sichern, Moment markieren, Aufnahme starten/beenden (mit Strg/Alt/Umschalt/Win) |
 | Speicherplatz | Aufnahme bei wenig freiem Platz beenden, Ordnergröße begrenzen |
 | Verhalten | Banner im Spiel, Ton beim Sichern, in den Infobereich schließen, Aufnahme beim Start, minimiert starten, Autostart |
 | Speicherort | Clip-Ordner wählen und öffnen |
@@ -123,6 +130,10 @@ Tastenkürzel und Verhalten wirken sofort.
   Startet ein erkanntes Spiel auf einem anderen Monitor, wechselt Stillclip
   dorthin, aber erst beim Start der Aufnahme – ein Fensterwechsel während einer
   laufenden Aufnahme ändert den Bildschirm nicht.
+- Markierungen gehören zu einer Aufnahme: Endet sie, verschwindet der Puffer
+  und mit ihm die noch nicht gesicherten Markierungen. Eine Markierung lässt
+  sich außerdem nur sichern, solange ihr Fenster im Rückblick liegt – die
+  Liste zeigt, wie viele Sekunden noch übrig sind.
 - Der automatische Neustart nach einem Abbruch holt den Puffer nicht zurück:
   Die Sekunden zwischen Abbruch und Neustart fehlen. Mit „Ganze Sitzung
   behalten“ wird gar nicht neu gestartet, damit das Material für die

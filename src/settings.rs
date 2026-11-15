@@ -335,6 +335,10 @@ pub struct Settings {
     pub microphone_volume: u32,
     /// A second, usually longer clip length; 0 switches it off.
     pub replay_seconds_long: u32,
+    /// Seconds a marked moment reaches back.
+    pub marker_before: u32,
+    /// Seconds a marked moment keeps after the mark.
+    pub marker_after: u32,
     /// Keep every segment and save the whole session as one video on stop.
     pub keep_full_session: bool,
     /// Stop recording while less than this many gigabytes are free; 0 switches it off.
@@ -345,6 +349,8 @@ pub struct Settings {
     pub hotkey_replay: Hotkey,
     #[serde(deserialize_with = "lenient")]
     pub hotkey_replay_long: Hotkey,
+    #[serde(deserialize_with = "lenient")]
+    pub hotkey_marker: Hotkey,
     #[serde(deserialize_with = "lenient")]
     pub hotkey_record: Hotkey,
     pub close_to_tray: bool,
@@ -379,11 +385,14 @@ impl Default for Settings {
             system_volume: 100,
             microphone_volume: 100,
             replay_seconds_long: 0,
+            marker_before: 20,
+            marker_after: 10,
             keep_full_session: false,
             min_free_gb: 5,
             storage_limit_gb: 0,
             hotkey_replay: Hotkey::key("F8"),
             hotkey_replay_long: Hotkey::none(),
+            hotkey_marker: Hotkey::none(),
             hotkey_record: Hotkey::none(),
             close_to_tray: true,
             record_on_launch: false,
@@ -410,19 +419,29 @@ impl Settings {
             self.replay_seconds_long = mechanics::replay_seconds(u64::from(self.replay_seconds_long));
         }
         self.fps = mechanics::fps(u64::from(self.fps));
+        self.marker_before = self.marker_before.clamp(1, mechanics::MAX_REPLAY_SECONDS as u32);
+        self.marker_after = self.marker_after.min(mechanics::MAX_REPLAY_SECONDS as u32);
         self.system_volume = self.system_volume.min(MAX_VOLUME);
         self.microphone_volume = self.microphone_volume.min(MAX_VOLUME);
         self.min_free_gb = self.min_free_gb.min(1024);
         self.storage_limit_gb = self.storage_limit_gb.min(100_000);
         self.hotkey_replay = self.hotkey_replay.normalized();
         self.hotkey_replay_long = self.hotkey_replay_long.normalized();
+        self.hotkey_marker = self.hotkey_marker.normalized();
         self.hotkey_record = self.hotkey_record.normalized();
         // Every shortcut must stay unique; later ones give way to earlier ones.
         if self.hotkey_replay.is_set() && self.hotkey_replay == self.hotkey_replay_long {
             self.hotkey_replay_long = Hotkey::none();
         }
+        if self.hotkey_marker.is_set()
+            && (self.hotkey_marker == self.hotkey_replay || self.hotkey_marker == self.hotkey_replay_long)
+        {
+            self.hotkey_marker = Hotkey::none();
+        }
         if self.hotkey_record.is_set()
-            && (self.hotkey_record == self.hotkey_replay || self.hotkey_record == self.hotkey_replay_long)
+            && (self.hotkey_record == self.hotkey_replay
+                || self.hotkey_record == self.hotkey_replay_long
+                || self.hotkey_record == self.hotkey_marker)
         {
             self.hotkey_record = Hotkey::none();
         }
@@ -437,9 +456,12 @@ impl Settings {
         self
     }
 
-    /// Seconds the segment ring has to hold: the longest clip length in use.
+    /// Seconds the segment ring has to hold: the longest clip length in use,
+    /// marked moments included, so a mark can still be saved afterwards.
     pub fn buffer_seconds(&self) -> u32 {
-        self.replay_seconds.max(self.replay_seconds_long)
+        self.replay_seconds
+            .max(self.replay_seconds_long)
+            .max(self.marker_before + self.marker_after)
     }
 
     /// Free space the recorder insists on, in bytes.
