@@ -384,7 +384,7 @@
     $('side-session-game').textContent = game ? game.name : '';
     $('record-button').classList.toggle('btn-danger', recording);
     $('record-button').classList.toggle('btn-primary', !recording);
-    $('record-button-text').textContent = recording ? tr('Aufnahme beenden') : tr('Aufnahme starten');
+    $('record-button-text').textContent = state.capture_pending ? tr('Start abbrechen') : recording ? tr('Aufnahme beenden') : tr('Aufnahme starten');
     $('record-button').disabled = !loaded || state.capture_busy || (!recording && !state.ffmpeg_available);
     $('replay-button').disabled = unavailable || !recording || !state.ffmpeg_available;
     $('replay-button-text').textContent = tr`${clipLength(settings.replay_seconds)} sichern`;
@@ -1263,7 +1263,7 @@
   };
 
   document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => { if (!button.disabled) ipc(button.dataset.action); }));
-  $('record-button').addEventListener('click', () => ipc(state.recording ? 'stop' : 'start'));
+  $('record-button').addEventListener('click', () => ipc(state.recording || state.capture_pending ? 'stop' : 'start'));
   $('replay-button').addEventListener('click', () => ipc('replay'));
   $('replay-long-button').addEventListener('click', () => ipc('replay_long'));
   $('mark-button').addEventListener('click', () => ipc('mark'));

@@ -9,13 +9,15 @@ $payload = Join-Path $stage 'payload'
 New-Item -ItemType Directory -Force $payload | Out-Null
 $binary = if ($NativeDir) { Join-Path $NativeDir 'stillclip.exe' } else { 'target/release/stillclip.exe' }
 Copy-Item $binary, README.md, CREDITS.md, WINDOWS-CHECKS.md, CHANGELOG.md, CONTRIBUTING.md, MECHANICS.md, mechanics.json $payload
-Copy-Item docs (Join-Path $payload 'docs') -Recurse -Force
+New-Item -ItemType Directory -Force (Join-Path $payload 'docs') | Out-Null
+Copy-Item docs/* (Join-Path $payload 'docs') -Recurse -Force
 Copy-Item packaging/THIRD-PARTY.txt $payload
 if ($CertificateThumbprint) {
     & (Join-Path $PSScriptRoot 'sign-file.ps1') -File (Join-Path $payload 'stillclip.exe') -CertificateThumbprint $CertificateThumbprint
 }
 if ($NativeDir -and (Test-Path (Join-Path $NativeDir 'models'))) {
-    Copy-Item (Join-Path $NativeDir 'models') (Join-Path $payload 'models') -Recurse -Force
+    New-Item -ItemType Directory -Force (Join-Path $payload 'models') | Out-Null
+    Copy-Item (Join-Path $NativeDir 'models/*') (Join-Path $payload 'models') -Recurse -Force
 }
 # Bundled in both variants and portable: analysis never downloads models at runtime.
 & (Join-Path $PSScriptRoot 'fetch-models.ps1') -OutputDir (Join-Path $payload 'models')

@@ -97,7 +97,7 @@
   </details><div class="desktop-progress" id="editor-desktop-progress" hidden><div class="desktop-actions"><span id="editor-desktop-phase" role="status"></span>${button('editor-desktop-cancel','cancel')}</div></div><p id="desktop-editor-error" class="desktop-error" role="alert"></p>`, document.querySelector('.editor-body'));
 
   function translate() { document.querySelectorAll('[data-copy]').forEach(node => { node.textContent = t(node.dataset.copy); }); }
-  function idle() { return !state.recording && !state.busy && !state.capture_busy && !state.exports?.length && !state.audio_test?.running && !state.dragging && !state.desktop?.task; }
+  function idle() { return !state.recording && !state.busy && !state.capture_busy && !state.capture_pending && !state.exports?.length && !state.audio_test?.running && !state.dragging && !state.desktop?.task; }
   function prefs() { return structuredClone(state.settings?.desktop || {}); }
   function savePreferences() {
     const next = prefs(); next.hud_enabled = $('hud-enabled').checked; next.hud_position = $('hud-position').value;
@@ -145,6 +145,7 @@
     $('wizard-error').textContent = state.desktop?.error || (state.error ? state.status : '');
     const preview = state.desktop?.preview;
     $('wizard-preview').hidden = !preview;
+    if (!preview && $('wizard-preview').hasAttribute('src')) { $('wizard-preview').pause(); $('wizard-preview').removeAttribute('src'); $('wizard-preview').load(); }
     if (preview && $('wizard-preview').getAttribute('src') !== preview.src) $('wizard-preview').src = preview.src;
     $('wizard-warnings').textContent = preview?.info?.warnings?.join('\n') || '';
     if (finishPending && state.settings?.desktop?.welcome_complete && !state.error) closeWizard();
@@ -219,7 +220,7 @@
   $('wizard-language').addEventListener('change',()=>{ readWizard(); ipc('set_language',{language:wizard.language}); });
   $('wizard-next').addEventListener('click',()=>{readWizard(); step=Math.min(2,step+1);renderWizard();});
   $('wizard-back').addEventListener('click',()=>{readWizard();step=Math.max(0,step-1);renderWizard();});
-  $('wizard-test').addEventListener('click',()=>{readWizard();ipc('setup_test',{settings:wizard});});
+  $('wizard-test').addEventListener('click',()=>{$('wizard-preview').pause();readWizard();ipc('setup_test',{settings:wizard});});
   $('wizard-finish').addEventListener('click',()=>{readWizard();finishPending=true;ipc('setup_finish',{settings:wizard});});
   for (const id of ['desktop-cancel','editor-desktop-cancel','wizard-cancel']) $(id).addEventListener('click',()=>ipc('desktop_cancel'));
   for (const id of ['hud-enabled','hud-position','hud-scale','automatic-updates','killfeed-player',...['left','top','width','height'].map(k=>'killfeed-'+k)]) $(id).addEventListener('change',savePreferences);

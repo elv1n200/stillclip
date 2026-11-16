@@ -14,7 +14,10 @@ $certificate = Get-Item "Cert:\CurrentUser\My\$CertificateThumbprint" -ErrorActi
 if (!$certificate.HasPrivateKey -or $certificate.NotAfter -lt (Get-Date) -or $certificate.NotBefore -gt (Get-Date)) {
     throw 'The signing certificate is expired, not yet valid, or has no accessible private key.'
 }
-if ($certificate.EnhancedKeyUsageList.ObjectId.Value -notcontains '1.3.6.1.5.5.7.3.3') { throw 'A code-signing certificate is required.' }
+$purposes = @($certificate.Extensions |
+    Where-Object { $_ -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] } |
+    ForEach-Object { $_.EnhancedKeyUsages } | ForEach-Object { $_.Value })
+if ($purposes -notcontains '1.3.6.1.5.5.7.3.3') { throw 'A code-signing certificate is required.' }
 $path = (Resolve-Path -LiteralPath $File).Path
 # Hardware-backed certificates work through their installed Windows CSP/KSP.
 # The key stays in its provider. No private key or password is exported.

@@ -281,7 +281,7 @@ impl App {
     }
 
     fn runtime_settings(&self) -> &Settings {
-        if self.recording || self.capture.transitioning {
+        if self.recording || self.capture.transitioning || self.capture.wants_start() {
             self.session_settings.as_ref().unwrap_or(&self.settings)
         } else {
             &self.settings
@@ -631,6 +631,7 @@ impl App {
             "elapsed": self.elapsed,
             "busy": self.busy || self.capture.transitioning,
             "capture_busy": self.capture.transitioning,
+            "capture_pending": self.capture.wants_start(),
             "exports": self.exports.views(),
             "audio_test": self.audio_test.state(),
             "dragging": self.dragging.is_some(),
@@ -1338,7 +1339,7 @@ impl App {
                 return;
             }
             "toggle" => {
-                let next = if self.recording || self.capture.transitioning {
+                let next = if self.recording || self.capture.transitioning || self.capture.wants_start() {
                     "stop"
                 } else {
                     "start"
@@ -2166,7 +2167,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         app.notify(crate::i18n::text("Es läuft keine Aufnahme. Starte zuerst die Aufnahme.", "No recording is running. Start recording first."), true, None);
                     }
                     HOTKEY_RECORD => {
-                        let next = if app.recording || app.capture.transitioning { "stop" } else { "start" };
+                        let next = if app.recording || app.capture.transitioning || app.capture.wants_start() { "stop" } else { "start" };
                         app.recording_job(next, proxy.clone());
                     }
                     _ => {}
@@ -2200,7 +2201,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 match action {
                     TrayAction::Show => show_window(&window, &mut app),
                     TrayAction::ToggleRecording => {
-                        let next = if app.recording || app.capture.transitioning { "stop" } else { "start" };
+                        let next = if app.recording || app.capture.transitioning || app.capture.wants_start() { "stop" } else { "start" };
                         app.recording_job(next, proxy.clone());
                     }
                     TrayAction::SaveReplay if app.recording && !app.busy && !app.capture.transitioning => {

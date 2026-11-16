@@ -442,6 +442,10 @@ mod tests {
             return;
         };
         let overlay = Overlay::start().expect("overlay window");
+        // This explicit developer screenshot needs to see the overlay. Normal
+        // operation keeps it excluded from supported capture APIs.
+        #[cfg(windows)]
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity(OVERLAY_HWND.load(Ordering::SeqCst) as _, 0); }
         let display = crate::capture::displays()
             .into_iter()
             .find(|d| d.primary)

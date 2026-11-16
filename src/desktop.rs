@@ -126,6 +126,17 @@ impl App {
         self.desktop.next_task += 1;
         let id = self.desktop.next_task;
         let control = jobs::Control::new();
+        let phase = match kind {
+            "update_check" => text("Updates prüfen", "Checking for updates"),
+            "update_download" => text("Update herunterladen", "Downloading update"),
+            "update_verify" => text("Herausgeber prüfen", "Verifying publisher"),
+            "killfeed" => text("Killfeed analysieren", "Analyzing killfeed"),
+            "setup" => text("Testaufnahme vorbereiten", "Preparing test recording"),
+            "audio_preview" => text("Audiovorschau vorbereiten", "Preparing audio preview"),
+            _ => text("Wellenform laden", "Loading waveform"),
+        };
+        control.progress(0.0, phase);
+        self.message(Ok(phase.into()));
         self.desktop.task = Some(Task {
             id,
             kind,
@@ -153,6 +164,11 @@ impl App {
             return;
         }
         self.desktop.task = None;
+        if result.is_ok() {
+            self.message(Ok(
+                text("Vorgang abgeschlossen.", "Operation completed.").into()
+            ));
+        }
         match result {
             Ok(Output::Audio(id, data)) => self.desktop.audio = Some((id, data)),
             Ok(Output::Review(id, data)) => {
