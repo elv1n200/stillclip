@@ -87,11 +87,11 @@ fn mix_command(
         .enumerate()
         .map(|(i, p)| format!("[{i}:a]volume={:.3}[a{i}]", p.gain))
         .collect();
-    let inputs = (0..inputs.len())
+    let labels = (0..inputs.len())
         .map(|i| format!("[a{i}]"))
         .collect::<String>();
     filters.push(format!(
-        "{inputs}amix=inputs={}:duration=longest:dropout_transition=0:normalize=0[out]",
+        "{labels}amix=inputs={}:duration=longest:dropout_transition=0:normalize=0[out]",
         inputs.len()
     ));
     cmd.args([
