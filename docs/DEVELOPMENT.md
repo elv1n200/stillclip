@@ -107,3 +107,19 @@ Für eine Veröffentlichung muss der zugehörige Commit auf `main` alle Prüfung
 bestehen. Das daraus erstellte ZIP wird unverändert an den passenden Release
 angehängt. `SHA256SUMS.txt` enthält dessen Prüfsumme. FFmpeg und WebView2 bleiben
 externe Voraussetzungen und werden nicht in das Paket aufgenommen.
+
+Der Workflow **Publish verified release** übernimmt diesen Schritt:
+
+1. Einen Release-Entwurf anlegen. `target_commitish` muss die vollständige
+   Commit-SHA des erfolgreichen **Build and verify**-Laufs auf `main` sein.
+2. Unter **Actions → Publish verified release → Run workflow** die ID dieses
+   Prüflaufs und die ID des Release-Entwurfs eintragen. Der Versions-Tag hat die
+   Form `v0.6.0`.
+3. Der Workflow prüft Quelle und Entwurf, lädt das unveränderte Paket,
+   kontrolliert ZIP und Prüfsumme und vergleicht die hochgeladenen Dateien mit
+   GitHubs SHA-256-Werten. Erst danach veröffentlicht er den Release.
+
+Die IDs stehen in der Actions-URL beziehungsweise in der GitHub-API-Antwort
+für den Release-Entwurf. Bereits veröffentlichte Releases werden abgewiesen.
+Nur der manuell gestartete Veröffentlichungsjob hat Schreibrechte; der
+normale Build bleibt auf lesenden Zugriff beschränkt.

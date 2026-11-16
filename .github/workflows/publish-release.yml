@@ -1,0 +1,75 @@
+name: Publish verified release
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: Successful Build and verify run on main
+        required: true
+        type: string
+      release_id:
+        description: Draft release ID targeting that run's full commit SHA
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_RUN: ${{ inputs.source_run }}
+      RELEASE_ID: ${{ inputs.release_id }}
+    steps:
+      - name: Check the source build and draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN" =~ ^[0-9]+$ && "$RELEASE_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > run.json
+          jq -e '.status == "completed" and .conclusion == "success" and .event == "push" and .head_branch == "main" and .path == ".github/workflows/verify.yml"' run.json
+          source_sha=$(jq -r '.head_sha' run.json)
+          gh api "repos/$GH_REPO/compare/$source_sha...main" | jq -e '.status == "ahead" or .status == "identical"'
+          gh api "repos/$GH_REPO/releases/$RELEASE_ID" > release.json
+          jq -e --arg sha "$source_sha" '.draft == true and .prerelease == false and .target_commitish == $sha' release.json
+          tag=$(jq -r '.tag_name' release.json)
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'RELEASE_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
+      - name: Download and verify the original package
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "$SOURCE_RUN" --name stillclip-windows-x64 --dir package
+          cd package
+          sha256sum --check --strict SHA256SUMS.txt
+          unzip -t stillclip-windows-x64.zip
+      - name: Upload and verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" package/stillclip-windows-x64.zip package/SHA256SUMS.txt --clobber
+          gh api "repos/$GH_REPO/releases/$RELEASE_ID/assets" > assets.json
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          assets = {asset['name']: asset for asset in json.loads(pathlib.Path('assets.json').read_text())}
+          for name in ('stillclip-windows-x64.zip', 'SHA256SUMS.txt'):
+              data = (pathlib.Path('package') / name).read_bytes()
+              asset = assets[name]
+              assert asset['state'] == 'uploaded' and asset['size'] == len(data), name
+              assert asset['digest'] == 'sha256:' + hashlib.sha256(data).hexdigest(), name
+              print(f'{name}: uploaded size and SHA-256 verified')
+          PY
+      - name: Publish the verified release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/releases/$RELEASE_ID" --method PATCH -F draft=false -f make_latest=true --jq '.html_url'
