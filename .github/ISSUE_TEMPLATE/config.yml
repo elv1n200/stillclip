@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Anleitung und Einstellungen
+    url: https://github.com/elv1n200/stillclip/blob/main/docs/USAGE.md
+    about: Aufnahme, Ton, Editor, Export und bekannte Grenzen nachlesen.

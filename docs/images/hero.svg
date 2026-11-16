@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="440" viewBox="0 0 1280 440" role="img" aria-labelledby="title description">
+  <title id="title">stillclip. — Dein Gameplay. Dein Moment.</title>
+  <desc id="description">Schwarzes Terminal-Banner mit eckigen Rahmen, rosa Wortmarke und einer grafischen Clip-Zeitleiste. Lokale Spielclips für Windows.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#252025" stroke-width=".6"/></pattern>
+    <linearGradient id="fade"><stop stop-color="#0b0b0c"/><stop offset="1" stop-color="#171016"/></linearGradient>
+    <linearGradient id="clip" x2="0" y2="1"><stop stop-color="#503144"/><stop offset="1" stop-color="#181318"/></linearGradient>
+  </defs>
+  <path fill="#0b0b0c" d="M0 0h1280v440H0z"/>
+  <path fill="url(#fade)" d="M640 0h640v440H640z"/>
+  <path fill="url(#grid)" d="M688 0h592v440H688z"/>
+  <path d="M16 16h1248v408H16z" fill="none" stroke="#656067"/>
+  <path d="M16 62h1248M16 384h1248" stroke="#383239"/>
+  <g font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="12" letter-spacing="1.5">
+    <text x="42" y="45" fill="#d6cfd4">STILLCLIP / WINDOWS GAME CAPTURE</text>
+    <text x="1237" y="45" text-anchor="end" fill="#e4a0b7">[ LOKAL ]</text>
+  </g>
+  <path d="M62 104h24v24H62z" fill="none" stroke="#e4a0b7"/>
+  <path d="M68 110h12v12H68z" fill="#e4a0b7"/>
+  <text x="104" y="122" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="12" letter-spacing="3" fill="#aaa1a8">AUFNEHMEN. MARKIEREN. BEHALTEN.</text>
+  <text x="58" y="224" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="100" font-weight="700" letter-spacing="-7" fill="#f1ecef">stillclip<tspan fill="#e4a0b7">.</tspan></text>
+  <text x="62" y="280" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="27" fill="#f1ecef">Dein Gameplay.</text>
+  <text x="62" y="319" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="27" fill="#e4a0b7">Dein Moment.</text>
+  <g transform="translate(768 96)">
+    <path d="M32 0h416v222H32z" fill="#100f11" stroke="#41333d"/>
+    <path d="M16 14h416v222H16z" fill="#121013" stroke="#75616e"/>
+    <path d="M0 28h416v222H0z" fill="#0b0b0c" stroke="#e4a0b7"/>
+    <path d="M0 62h416" stroke="#49343f"/>
+    <rect x="16" y="41" width="8" height="8" fill="#e4a0b7"/>
+    <text x="36" y="50" fill="#e4a0b7" font-family="monospace" font-size="11" letter-spacing="2">MOMENT GESICHERT</text>
+    <text x="398" y="50" text-anchor="end" fill="#aaa1a8" font-family="monospace" font-size="11">00:30</text>
+    <path d="M16 78h384v104H16z" fill="url(#clip)"/>
+    <g fill="none" stroke="#bc829e" stroke-width="1.5">
+      <path d="m16 182 120-104M76 182l85-104M136 182l50-104M196 182l15-104M256 182l-20-104M316 182l-55-104M376 182l-90-104" opacity=".4"/>
+      <path d="M16 160h384M16 139h384M16 122h384M16 108h384M16 96h384" opacity=".25"/>
+      <path d="M170 88h76v76h-76z"/>
+      <path d="m199 108 21 18-21 18z" fill="#e4a0b7" stroke="none"/>
+    </g>
+    <path d="M16 202h70v22H16zM92 202h56v22H92zM326 202h74v22h-74z" fill="#33272e"/>
+    <path d="M154 202h166v22H154z" fill="#e4a0b7"/>
+    <path d="M271 192v42" stroke="#faf0f5" stroke-width="2"/>
+    <path d="m265 191 6 8 6-8" fill="#faf0f5"/>
+    <path d="M154 198v30m166-30v30" stroke="#e4a0b7" stroke-width="3"/>
+  </g>
+  <g fill="#a69ba3" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="11" letter-spacing="1.5">
+    <text x="42" y="410">REPLAY-PUFFER / CLIP-EDITOR / DISCORD-EXPORT</text>
+    <text x="1237" y="410" text-anchor="end" fill="#e4a0b7">DEINE DATEIEN. DEINE KONTROLLE.</text>
+  </g>
+</svg>

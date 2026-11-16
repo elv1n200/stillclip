@@ -1,0 +1,37 @@
+name: Fehler melden
+description: Ein Problem mit Aufnahme, Ton, Bibliothek oder Export beschreiben.
+title: "[Fehler] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Was passiert?
+      description: Beschreibe das tatsächliche und das erwartete Verhalten.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Schritte zum Nachstellen
+      placeholder: "1. …\n2. …\n3. …"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Stillclip-Version
+      placeholder: z. B. 0.6.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Umgebung
+      description: Windows-Build, Grafikkarte, Encoder und FFmpeg-Version; bei Aufnahmeproblemen auch Bild- und Tonquelle.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Meldung oder Screenshot
+      description: Optional. Persönliche Dateipfade und private Inhalte vorher entfernen.

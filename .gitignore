@@ -9,7 +9,7 @@
 /tools/*.exe
 /tools/*.dll
 
-# Screenshots from automated checks; only the curated v2-*.png are tracked
+# Temporary screenshots from automated checks; curated documentation images are tracked
 /shots/qa/
 /shots/overlay*.png
 /shots/now.png

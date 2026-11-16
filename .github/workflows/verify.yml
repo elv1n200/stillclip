@@ -30,12 +30,17 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist/stillclip -Force
-          Copy-Item target/release/stillclip.exe, README.md, CREDITS.md, WINDOWS-CHECKS.md dist/stillclip
+          Copy-Item target/release/stillclip.exe, README.md, CREDITS.md, WINDOWS-CHECKS.md, CHANGELOG.md, CONTRIBUTING.md, MECHANICS.md, mechanics.json dist/stillclip
+          Copy-Item docs dist/stillclip/docs -Recurse
           Compress-Archive -Path dist/stillclip/* -DestinationPath dist/stillclip-windows-x64.zip
+          $archiveHash = (Get-FileHash dist/stillclip-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$archiveHash  stillclip-windows-x64.zip`n" | Set-Content dist/SHA256SUMS.txt -Encoding ascii -NoNewline
       - uses: actions/upload-artifact@v4
         with:
           name: stillclip-windows-x64
-          path: dist/stillclip-windows-x64.zip
+          path: |
+            dist/stillclip-windows-x64.zip
+            dist/SHA256SUMS.txt
           if-no-files-found: error
   interface:
     runs-on: ubuntu-latest

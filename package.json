@@ -1,6 +1,11 @@
 {
   "name": "stillclip-ui-checks",
   "private": true,
-  "scripts": { "test": "node tests/ui.cjs" },
-  "devDependencies": { "playwright": "1.62.1" }
+  "scripts": {
+    "test": "node tests/ui.cjs",
+    "screenshots": "node scripts/screenshots.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
 }

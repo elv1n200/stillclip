@@ -1,5 +1,10 @@
 # Recovered mechanics
 
+> **Historical analysis, 14 November 2026.** The Stillclip limitations described
+> here reflect that earlier implementation. For current recording, audio and
+> export capabilities, see the [project overview](README.md) and
+> [usage guide](docs/USAGE.md).
+
 Analysis date: 2026-11-14. This records the installed original, not public product documentation. Addresses are specific to the hashes below. Native addresses are preferred virtual addresses; managed RVAs are relative to the module image base (they are not native function addresses). JavaScript locations are bundle offsets, not invented machine addresses.
 
 > **Note on this repository.** Only Stillclip's own source code is published
@@ -116,15 +121,15 @@ Full records are under `../investigation.cany/evidence/<first-two-id-characters>
 | Resolution handler IL | `ev_7ea3dba24d41b53ffb4f46458b1415513fcf8395b762441a08ea1ef48ab8cf22` |
 | Aspect-ratio handler IL | `ev_15cbea6a5d79bc3d700534984e7c4b1ea5c7c3f1af059c492e56da2b9e05dec2` |
 
-The complete JavaScript chain and original byte offsets are in [the source findings](../reference/medal-deep-js-findings.md). `main.min.js!bo` is `0x141318`, getter `Pt` is `0x14548E`, fallback `cx` is `0x14527F`, conversion `kI` is `0x145696`, and update `_u` is `0x1457DD`. Replay presets/custom input are `renderer-CustomGameHotkeyContext.js!_` at `0x847` and `ce` at `0x8BF`; editor minimum/clamping are `renderer-rulerStep.js!Ot` at `0x5CBC` and `fi.#ve` at `0x72D0`.
+The complete JavaScript chain and original byte offsets are in the source findings (`../reference/medal-deep-js-findings.md`, retained locally). `main.min.js!bo` is `0x141318`, getter `Pt` is `0x14548E`, fallback `cx` is `0x14527F`, conversion `kI` is `0x145696`, and update `_u` is `0x1457DD`. Replay presets/custom input are `renderer-CustomGameHotkeyContext.js!_` at `0x847` and `ce` at `0x8BF`; editor minimum/clamping are `renderer-rulerStep.js!Ot` at `0x5CBC` and `fi.#ve` at `0x72D0`.
 
 ## Verification
 
-All 11 regular tests and 2 synthetic FFmpeg integration tests passed, and the release executable was rebuilt successfully. Seven native Ghidra pseudocode results were completed and read. The final application checker passed the build and startup/rendering at 1240 x 820. Its mechanics-schema check accepted all 21 values with sources and zero estimated values, while explicitly reporting that behavior was not measured against those values. [The saved checker result](../reference/rebuild-check-results.json) records that distinction, and [the rendered app screenshot](../checks/round-0/screenshot.png) confirms startup/rendering. Original-app visual and full runtime equivalence remain unverified under open question `unk_405caf95dc412882`; the documented differences above remain explicit limits of the rebuilt app.
+All 11 regular tests and 2 synthetic FFmpeg integration tests passed, and the release executable was rebuilt successfully. Seven native Ghidra pseudocode results were completed and read. The final application checker passed the build and startup/rendering at 1240 x 820. Its mechanics-schema check accepted all 21 values with sources and zero estimated values, while explicitly reporting that behavior was not measured against those values. The saved checker result (`../reference/rebuild-check-results.json`, retained locally) records that distinction, and the rendered app screenshot (`../checks/round-0/screenshot.png`, retained locally) confirms startup/rendering. Original-app visual and full runtime equivalence remain unverified under open question `unk_405caf95dc412882`; the documented differences above remain explicit limits of the rebuilt app.
 
 ## Completed native decompilation
 
-Seven calls to `native_function_pseudocode` on the original recording engine `scope.dll` completed under Ghidra 12.1.4. Each call was awaited and its full returned pseudo-C was read before the next native call. The complete outputs are preserved in [the native transcript](../reference/native-pseudocode.md); the managed details are in [the recorder findings](../reference/managed-mechanics.md).
+Seven calls to `native_function_pseudocode` on the original recording engine `scope.dll` completed under Ghidra 12.1.4. Each call was awaited and its full returned pseudo-C was read before the next native call. The complete outputs are preserved in the native transcript (`../reference/native-pseudocode.md`, retained locally); the managed details are in the recorder findings (`../reference/managed-mechanics.md`, retained locally).
 
 The original main-program framework function at `0x141728e00` was requested and awaited, but the tool returned a 300-second timeout. No successful main-program pseudocode result is claimed. The completed readings below belong to the installed original's recording engine, reached through its managed recorder and ScopeSharp declarations.
 
