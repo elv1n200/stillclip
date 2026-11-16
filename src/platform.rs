@@ -25,6 +25,73 @@ fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
+/// Windows 11 otherwise rounds the native window even when every UI panel is
+/// square. Older Windows versions simply ignore unsupported DWM attributes.
+pub fn style_window(hwnd: isize) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_DONOTROUND,
+    };
+    let corners = DWMWCP_DONOTROUND;
+    let dark = 1_i32;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd as HWND,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            (&corners as *const i32).cast(),
+            std::mem::size_of_val(&corners) as u32,
+        );
+        DwmSetWindowAttribute(
+            hwnd as HWND,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            (&dark as *const i32).cast(),
+            std::mem::size_of_val(&dark) as u32,
+        );
+    }
+}
+
+/// Hold this handle before reading settings or recovering any buffer. Windows
+/// releases it on crashes too, so a stale lock cannot strand the application.
+pub struct InstanceGuard(windows_sys::Win32::Foundation::HANDLE);
+
+impl InstanceGuard {
+    pub fn acquire() -> Result<Option<Self>, String> {
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS},
+            System::Threading::CreateMutexW,
+        };
+        let name = wide("Local\\Stillclip.Application");
+        unsafe {
+            let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+            if handle.is_null() {
+                return Err("Die Instanzsperre konnte nicht geöffnet werden.".into());
+            }
+            if GetLastError() == ERROR_ALREADY_EXISTS {
+                CloseHandle(handle);
+                let title = wide("Stillclip");
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE,
+                };
+                let window = FindWindowW(std::ptr::null(), title.as_ptr());
+                if !window.is_null() {
+                    ShowWindow(window, SW_RESTORE);
+                    SetForegroundWindow(window);
+                }
+                return Ok(None);
+            }
+            Ok(Some(Self(handle)))
+        }
+    }
+}
+
+impl Drop for InstanceGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
 /// Free bytes on the volume that holds `path`, for the current user's quota.
 /// Walks up to the nearest existing folder, so a clip folder that does not
 /// exist yet still reports its drive.
@@ -182,7 +249,9 @@ pub fn recycle(path: &Path) -> Result<(), String> {
     if code == 0 && operation.fAnyOperationsAborted == 0 {
         Ok(())
     } else {
-        Err(format!("Der Clip konnte nicht in den Papierkorb verschoben werden (Code {code})."))
+        Err(format!(
+            "Der Clip konnte nicht in den Papierkorb verschoben werden (Code {code})."
+        ))
     }
 }
 
@@ -231,7 +300,9 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
             std::ptr::null_mut(),
         );
         if created != 0 {
-            return Err(format!("Der Autostart-Schlüssel ist nicht erreichbar (Fehler {created})."));
+            return Err(format!(
+                "Der Autostart-Schlüssel ist nicht erreichbar (Fehler {created})."
+            ));
         }
         let result = if enabled {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -256,7 +327,9 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
         if result == 0 {
             Ok(())
         } else {
-            Err(format!("Der Autostart konnte nicht geändert werden (Fehler {result})."))
+            Err(format!(
+                "Der Autostart konnte nicht geändert werden (Fehler {result})."
+            ))
         }
     }
 }
@@ -299,7 +372,13 @@ impl Hotkeys {
                             let wanted = shared.lock().map(|b| b.clone()).unwrap_or_default();
                             let mut failed = Vec::new();
                             for (id, modifiers, key) in wanted {
-                                if RegisterHotKey(std::ptr::null_mut(), id, modifiers | MOD_NOREPEAT, key) == 0 {
+                                if RegisterHotKey(
+                                    std::ptr::null_mut(),
+                                    id,
+                                    modifiers | MOD_NOREPEAT,
+                                    key,
+                                ) == 0
+                                {
                                     failed.push(id);
                                 } else {
                                     registered.push(id);
@@ -317,7 +396,10 @@ impl Hotkeys {
             })
             .ok()?;
         let thread_id = receiver.recv().ok()?;
-        Some(Hotkeys { thread_id, bindings })
+        Some(Hotkeys {
+            thread_id,
+            bindings,
+        })
     }
 
     /// Replaces all bindings: `(id, modifier flags, virtual key)`.
@@ -388,7 +470,12 @@ fn copy_wide(target: &mut [u16], text: &str) {
     target[written] = 0;
 }
 
-unsafe extern "system" fn tray_window_proc(hwnd: HWND, message: u32, wparam: usize, lparam: isize) -> isize {
+unsafe extern "system" fn tray_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
     match message {
         WM_TRAY_CALLBACK => {
@@ -604,11 +691,31 @@ impl Drop for Tray {
 
 /// Applies the generated icon to the main window's title bar and taskbar entry.
 pub fn set_window_icon(hwnd: isize) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, ICON_BIG, ICON_SMALL, WM_SETICON};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageW, ICON_BIG, ICON_SMALL, WM_SETICON,
+    };
     let big = crate::icon::hicon(32);
     let small = crate::icon::hicon(16);
     unsafe {
         SendMessageW(hwnd as HWND, WM_SETICON, ICON_BIG as usize, big as isize);
-        SendMessageW(hwnd as HWND, WM_SETICON, ICON_SMALL as usize, small as isize);
+        SendMessageW(
+            hwnd as HWND,
+            WM_SETICON,
+            ICON_SMALL as usize,
+            small as isize,
+        );
+    }
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use super::InstanceGuard;
+
+    #[test]
+    fn a_second_instance_cannot_enter_recovery_until_the_first_exits() {
+        let first = InstanceGuard::acquire().unwrap().expect("first instance");
+        assert!(InstanceGuard::acquire().unwrap().is_none());
+        drop(first);
+        assert!(InstanceGuard::acquire().unwrap().is_some());
     }
 }

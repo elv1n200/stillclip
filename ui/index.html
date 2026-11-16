@@ -64,7 +64,9 @@
     </aside>
 
     <main class="main">
+      <header class="window-bar"><strong>stillclip</strong><span>/</span><span>Deine Momente. Auf deinem Rechner.</span><span class="local-label">[ lokal ]</span></header>
       <section id="page-library" aria-label="Clip-Bibliothek">
+        <div class="page-heading"><h1>Bibliothek</h1><p>Aufnehmen. Markieren. Behalten.</p></div>
         <div class="setup-banner" id="setup-banner" hidden>
           <div class="setup-text"><svg><use href="#i-info"/></svg><span>Für Aufnahmen und Zuschnitte wird FFmpeg benötigt. Wähle die Datei <code>ffmpeg.exe</code> aus.</span></div>
           <button class="btn" data-action="choose_ffmpeg">FFmpeg auswählen<svg><use href="#i-arrow"/></svg></button>
@@ -91,12 +93,14 @@
           </div>
           <div class="markers" id="markers" hidden></div>
           <div class="session-warnings" id="session-warnings" hidden></div>
+          <details class="diagnostics"><summary>Aufnahmediagnose</summary><div id="diagnostic-values" class="diagnostic-values"></div><p class="setting-help" id="diagnostic-health"></p></details>
         </section>
 
         <section aria-labelledby="library-heading">
           <div class="toolbar">
             <h2 id="library-heading">Clips</h2>
             <span class="library-count" id="library-count">0</span>
+            <label class="favorite-filter"><input type="checkbox" id="favorites-only"> Nur Favoriten</label>
             <div class="search-wrap"><svg aria-hidden="true"><use href="#i-search"/></svg><input class="search" id="search" type="search" aria-label="Clips durchsuchen" placeholder="Suchen" autocomplete="off"></div>
             <select id="sort" aria-label="Clips sortieren"><option value="newest">Neueste zuerst</option><option value="oldest">Älteste zuerst</option><option value="name">Name A–Z</option><option value="size">Größte zuerst</option><option value="longest">Längste zuerst</option></select>
             <span class="toolbar-gap"></span>
@@ -104,8 +108,18 @@
             <button class="icon-btn" data-action="open_folder" title="Clip-Ordner öffnen" aria-label="Clip-Ordner öffnen"><svg><use href="#i-folder"/></svg></button>
             <button class="btn small" data-action="import"><svg><use href="#i-import"/></svg>Importieren</button>
           </div>
+          <details class="library-filters"><summary>Spiel, Tags, Datum &amp; Länge filtern</summary>
+            <div class="filter-fields">
+              <label>Spiel<select id="filter-game" aria-label="Nach Spiel filtern"><option value="">Alle Spiele</option></select></label>
+              <label>Tag<select id="filter-tag" aria-label="Nach Tag filtern"><option value="">Alle Tags</option></select></label>
+              <label>Von<input class="input" id="filter-from" type="date" aria-label="Clips ab Datum"></label>
+              <label>Bis<input class="input" id="filter-to" type="date" aria-label="Clips bis Datum"></label>
+              <label>Länge<select id="filter-length" aria-label="Nach Länge filtern"><option value="">Alle Längen</option><option value="short">Unter 30 Sekunden</option><option value="medium">30 bis 120 Sekunden</option><option value="long">Über 120 Sekunden</option></select></label>
+              <button class="btn" id="reset-filters">Filter zurücksetzen</button>
+            </div>
+          </details>
           <div class="empty-state" id="empty-state">
-            <p>Noch keine Clips.</p>
+            <p>Noch keine Clips. Starte eine Aufnahme und sichere deinen ersten Moment mit <kbd>F8</kbd>.</p>
             <button class="text-button" data-action="import">Video importieren<svg><use href="#i-arrow"/></svg></button>
           </div>
           <div class="empty-state" id="no-results" hidden>
@@ -117,7 +131,9 @@
       </section>
 
       <section class="settings" id="page-settings" aria-label="Einstellungen" hidden>
-        <div class="toolbar"><h2>Einstellungen</h2></div>
+        <div class="page-heading"><h1>Einstellungen</h1><p>So, wie du spielst.</p></div>
+        <nav class="settings-nav" aria-label="Einstellungsbereiche"></nav>
+        <p class="settings-locked" id="settings-locked" hidden>Die Aufnahme läuft. Beende sie, um Bild, Ton oder Puffer zu ändern. Tastenkürzel und Verhalten bleiben anpassbar.</p>
 
         <div class="settings-card">
           <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-bolt"/></svg></div><div><h2>Spiele</h2><p>Erkennen und automatisch aufnehmen.</p></div></div>
@@ -137,8 +153,26 @@
         </div>
 
         <div class="settings-card">
+          <div class="settings-card-heading"><div><h2>Spieleprofile</h2><p>Eigene Aufnahmevorgaben je Spiel.</p></div></div>
+          <div class="settings-body profile-form">
+            <label>Spiel<select id="profile-game" aria-label="Spielprofil"></select></label>
+            <label>Auflösung<select id="profile-quality"><option value="p720">720p</option><option value="p1080">1080p</option><option value="p1440">1440p</option><option value="native">Nativ</option></select></label>
+            <label>Bildrate<select id="profile-fps"></select></label>
+            <label>Rückblick (s)<input class="input" id="profile-replay" type="number" min="15" max="1200" step="1"></label>
+            <label><input id="profile-microphone" type="checkbox"> Mikrofon</label>
+            <label><input id="profile-system-audio" type="checkbox"> Spiel-/Systemton aufnehmen</label>
+            <label><input id="profile-window" type="checkbox"> Nur Spielfenster</label>
+            <label><input id="profile-audio" type="checkbox"> Nur Spielton</label>
+            <button class="btn" id="profile-save">Profil übernehmen</button><button class="btn" id="profile-remove">Profil entfernen</button>
+            <p class="setting-help" id="profile-status"></p>
+          </div>
+        </div>
+
+        <div class="settings-card">
           <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-monitor"/></svg></div><div><h2>Aufnahme</h2><p>Bildschirm, Qualität, Encoder.</p></div></div>
           <div class="settings-body">
+            <div class="setting-row"><div><div class="setting-label">Aufnahmequelle</div><div class="setting-help" id="window-support">Fensteraufnahme benötigt FFmpeg mit Windows Graphics Capture. Beim Minimieren endet die Aufnahme.</div></div><select id="setting-capture-window" aria-label="Aufnahmequelle"><option value="false">Ganzer Bildschirm</option><option value="true">Nur Spielfenster</option></select></div>
+            <div class="setting-row"><div><div class="setting-label">Zielprogramm</div><div class="setting-help">Für Fensteraufnahme und Spielton. Ein automatisch erkanntes Spiel hat Vorrang.</div></div><select id="setting-target" aria-label="Zielprogramm"></select></div>
             <div class="setting-row"><div><div class="setting-label">Bildschirm</div><div class="setting-help" id="display-help">Dieser Bildschirm wird aufgenommen.</div></div><select id="setting-display" aria-label="Bildschirm"></select></div>
             <div class="setting-row"><div><div class="setting-label">Bildschirm des Spiels verwenden</div><div class="setting-help">Läuft ein erkanntes Spiel auf einem anderen Monitor, nimmt Stillclip diesen auf statt den oben gewählten.</div></div><label class="switch"><input type="checkbox" id="setting-follow-display"><span class="slider"></span></label></div>
             <div class="setting-row"><div><div class="setting-label">Qualität</div><div class="setting-help" id="quality-help">Höhere Auflösung bedeutet größere Dateien.</div></div><select id="setting-quality" aria-label="Qualität"><option value="p720">720p · 15 Mbit/s (Standard)</option><option value="p1080">1080p · 25 Mbit/s</option><option value="p1440">1440p · 40 Mbit/s</option><option value="native">Nativ · volle Bildschirmauflösung</option></select></div>
@@ -151,11 +185,18 @@
         <div class="settings-card">
           <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-sound"/></svg></div><div><h2>Ton</h2><p>Systemton und Mikrofon.</p></div></div>
           <div class="settings-body">
+            <div class="setting-row"><div><div class="setting-label">Tonquelle</div><div class="setting-help">Spielton erfasst nur das Zielprogramm und seine Unterprozesse. Benötigt Windows 11 oder Build 20348+. Mikrofon wird separat zugemischt.</div></div><select id="setting-game-audio" aria-label="Tonquelle"><option value="false">Gesamter Systemton</option><option value="true">Nur Spielton</option></select></div>
             <div class="setting-row"><div><div class="setting-label">Systemton aufnehmen</div><div class="setting-help" id="system-audio-help">Alles, was über dein Standard-Wiedergabegerät läuft.</div></div><label class="switch"><input type="checkbox" id="setting-system-audio"><span class="slider"></span></label></div>
             <div class="setting-row" id="system-volume-row"><div><label class="setting-label" for="setting-system-volume">Lautstärke Systemton</label><div class="setting-help" id="system-volume-help">100 % lässt den Ton unverändert.</div></div><div class="volume-wrap"><input id="setting-system-volume" type="range" min="0" max="200" step="5" value="100" aria-label="Lautstärke Systemton"><span class="volume-value" id="system-volume-value">100 %</span></div></div>
             <div class="setting-row"><div><div class="setting-label">Mikrofon aufnehmen</div><div class="setting-help">Deine Stimme wird in den Clip gemischt.</div></div><label class="switch"><input type="checkbox" id="setting-microphone"><span class="slider"></span></label></div>
             <div class="setting-row" id="microphone-device-row"><div><div class="setting-label">Mikrofon</div><div class="setting-help">Welches Gerät verwendet wird.</div></div><select id="setting-microphone-device" aria-label="Mikrofon"></select></div>
             <div class="setting-row" id="microphone-volume-row"><div><label class="setting-label" for="setting-microphone-volume">Lautstärke Mikrofon</label><div class="setting-help">Zu leise im Clip? Hier lauter stellen, ohne Windows anzufassen.</div></div><div class="volume-wrap"><input id="setting-microphone-volume" type="range" min="0" max="200" step="5" value="100" aria-label="Lautstärke Mikrofon"><span class="volume-value" id="microphone-volume-value">100 %</span></div></div>
+            <section class="audio-test" aria-labelledby="audio-test-heading">
+              <h3 id="audio-test-heading">Ton vor dem Spielen prüfen</h3>
+              <p class="setting-help">10 Sekunden mit den aktuellen Einstellungen und gegebenenfalls dem Spielprofil. Sprich kurz ins Mikrofon und spiele Ton ab. Der Test wird nur vorübergehend lokal gespeichert.</p>
+              <div class="section-buttons"><button class="btn" id="audio-test-start">10 Sekunden testen</button><button class="btn" id="audio-test-cancel" hidden>Abbrechen</button></div>
+              <p id="audio-test-status" role="status"></p><div id="audio-levels"></div><audio id="audio-preview" controls preload="metadata" hidden></audio>
+            </section>
             <div class="setting-row" id="microphone-separate-row"><div><div class="setting-label">Mikrofon zusätzlich als eigene Tonspur</div><div class="setting-help">Spur 1 bleibt der Mix, Spur 2 enthält nur deine Stimme – praktisch zum Nachbearbeiten.</div></div><label class="switch"><input type="checkbox" id="setting-mic-separate"><span class="slider"></span></label></div>
           </div>
         </div>
@@ -232,6 +273,9 @@
         </div>
       </section>
 
+      <section class="export-queue" id="export-queue" hidden aria-label="Export-Warteschlange">
+        <h2>Exporte <span id="export-count"></span></h2><p class="setting-help">Du kannst währenddessen weitere Clips vorbereiten. Beim Beenden werden offene Aufträge abgebrochen.</p><ol id="export-list"></ol>
+      </section>
       <footer class="footer"><span class="status-line" id="app-status" role="status" aria-live="polite">Wird geladen …</span></footer>
     </main>
   </div>
@@ -247,7 +291,7 @@
           <button class="icon-btn" id="close-editor" title="Schließen" aria-label="Editor schließen"><svg><use href="#i-close"/></svg></button>
         </div>
       </header>
-      <div class="video-wrap"><video id="editor-video" preload="metadata" playsinline></video></div>
+      <div class="video-wrap"><video id="editor-video" preload="metadata" playsinline></video><div id="crop-frame" hidden aria-hidden="true"><span>9:16 · ziehen</span></div></div>
       <div class="video-error" id="video-error" hidden>Dieses Video kann in der Vorschau nicht wiedergegeben werden. Du kannst es mit deinem Standardplayer öffnen.</div>
       <div class="editor-body">
         <div class="timeline" id="timeline">
@@ -278,17 +322,41 @@
             <label><span class="field-label">Clip-Name</span><input class="input" id="clip-name" autocomplete="off" maxlength="180"></label>
             <button class="btn" id="rename-clip">Umbenennen</button>
           </div>
+          <section class="annotation-panel" aria-label="Spiel und Tags">
+            <label>Spiel<input class="input" id="clip-game" maxlength="80" placeholder="z. B. VALORANT"></label>
+            <label>Tags<input class="input" id="clip-tags" placeholder="Ace, Clutch, Lustig" aria-describedby="tags-help"></label>
+            <button class="btn" id="save-tags">Tags speichern</button><p class="setting-help" id="tags-help">Mit Kommas trennen · höchstens 12 Tags mit je 32 Zeichen.</p>
+          </section>
           <div class="trim-panel">
             <div class="trim-heading"><h3><svg><use href="#i-cut"/></svg>Zuschneiden</h3><span class="marker-chip" id="marker-count" hidden></span><span class="trim-duration" id="clip-duration"></span></div>
+            <div class="crop-controls">
+              <label>Bildformat<select id="crop-format" aria-label="Bildformat"><option value="original">Original</option><option value="720">9:16 · 720 × 1280</option><option value="1080">9:16 · 1080 × 1920</option></select></label>
+              <div id="crop-position" hidden><label>Horizontal<input id="crop-x" type="range" min="0" max="100" value="50" aria-label="Ausschnitt horizontal"></label><label>Vertikal<input id="crop-y" type="range" min="0" max="100" value="50" aria-label="Ausschnitt vertikal"></label><button class="btn small" id="crop-center">Zentrieren</button></div>
+              <p class="setting-help" id="crop-help" hidden>Ziehe den Rahmen im Video oder nutze die Regler. Der Ausschnitt bleibt während des Clips an dieser Stelle. Discord kann die Auflösung für sein Dateilimit verringern.</p>
+            </div>
             <div class="trim-controls">
               <label><span class="field-label">Start (s)</span><input class="input" id="trim-start" type="number" min="0" step="0.1" value="0"></label>
               <label><span class="field-label">Ende (s)</span><input class="input" id="trim-end" type="number" min="0.1" step="0.1" placeholder="z. B. 15"></label>
-              <label><span class="field-label">Export</span><select id="trim-mode" aria-label="Exportmodus"><option value="precise">Präzise (neu kodiert)</option><option value="fast">Schnell (ohne Neukodierung)</option></select></label>
-              <button class="btn btn-primary" id="trim-clip"><svg><use href="#i-cut"/></svg>Als neuen Clip speichern</button>
+              <label><span class="field-label">Export</span><select id="trim-mode" aria-label="Exportmodus"><option value="precise">Präzise (neu kodiert)</option><option value="fast">Schnell (ohne Neukodierung)</option><option value="discord_free">Discord ohne Nitro · 20 MB</option><option value="discord_nitro">Discord Nitro · 1 GB</option></select></label>
+              <button class="btn btn-primary" id="trim-clip"><svg><use href="#i-cut"/></svg><span id="trim-label">Als neuen Clip speichern</span></button>
             </div>
             <p class="trim-help" id="trim-help">Das Original bleibt erhalten.</p>
           </div>
+          <section class="highlight-panel" aria-labelledby="highlight-heading">
+            <h3 id="highlight-heading">Highlights zusammenstellen</h3>
+            <p class="setting-help">Füge die aktuelle Auswahl hinzu. Öffne anschließend weitere Clips und sortiere die Ausschnitte hier. Bis zu 20 Ausschnitte und 30 Minuten mit 60 FPS. Für Hochkant wird der Zuschnitt beim Hinzufügen übernommen; ohne Zuschnitt wird zentriert.</p>
+            <button class="btn" id="highlight-add">Auswahl hinzufügen</button>
+            <ol id="highlight-list"></ol>
+            <div class="highlight-actions">
+              <span id="highlight-summary">Noch keine Ausschnitte.</span>
+              <select id="highlight-format" aria-label="Highlight-Bildformat"><option value="original">16:9 · 1080p</option><option value="720">9:16 · 720 × 1280</option><option value="1080">9:16 · 1080 × 1920</option></select>
+              <select id="highlight-mode" aria-label="Highlight-Exportprofil"><option value="precise">MP4 · hohe Qualität</option><option value="discord_free">Discord ohne Nitro · 20 MB</option><option value="discord_nitro">Discord Nitro · 1 GB</option></select>
+              <button class="btn btn-primary" id="highlight-export" disabled>Highlight speichern</button>
+              <button class="btn" id="highlight-clear" disabled>Leeren</button>
+            </div>
+          </section>
         </div>
+        <section class="export-queue" id="editor-export-queue" hidden aria-label="Export-Warteschlange im Editor"><h3>Exporte <span id="editor-export-count"></span></h3><ol id="editor-export-list"></ol></section>
         <div class="status-line editor-status" id="editor-status" role="status" aria-live="polite"></div>
       </div>
     </section>

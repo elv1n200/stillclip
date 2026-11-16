@@ -3,15 +3,25 @@
 #![recursion_limit = "256"]
 
 mod audio;
+mod audio_test;
 mod capture;
+mod diagnostics;
+mod discord;
+mod drag;
 mod encoding;
+mod export;
 mod games;
+mod highlights;
 mod icon;
+mod jobs;
 mod library;
+mod lifecycle;
 mod mechanics;
 mod media;
 mod overlay;
 mod platform;
+mod portrait;
+mod process_tree;
 mod recorder;
 mod screenshot;
 mod settings;
@@ -54,6 +64,11 @@ const FPS_CHOICES: [u32; 5] = [24, 30, 60, 120, 144];
 pub enum AppEvent {
     Action(Value),
     Finished(JobResult),
+    ExportFinished(u64, Result<JobOutcome, String>),
+    ClipAnnotation(PathBuf, library::Annotation),
+    AudioMeters(u64, audio_test::Meters),
+    AudioFinished(u64, Result<audio_test::Preview, String>),
+    DragFinished(Result<(), String>),
     Notice(String),
     Hotkey(i32),
     HotkeysApplied(Vec<i32>),
@@ -107,6 +122,7 @@ struct Notice {
 struct App {
     config: PathBuf,
     settings: Settings,
+    session_settings: Option<Settings>,
     ffmpeg: Option<PathBuf>,
     recorder: Option<Recorder>,
     clips: Vec<(u64, Clip)>,
@@ -115,6 +131,9 @@ struct App {
     index: Index,
     indexing: bool,
     busy: bool,
+    exports: jobs::Queue,
+    audio_test: audio_test::Test,
+    dragging: Option<(PathBuf, drag::Control)>,
     recording: bool,
     elapsed: u64,
     status: String,
@@ -133,7 +152,7 @@ struct App {
     tray_hint_shown: bool,
     autostart: bool,
     notice: Notice,
-    pending_start: bool,
+    capture: lifecycle::CaptureControl,
     recovered: Option<PathBuf>,
     watcher: Option<GameWatcher>,
     overlay: Option<Overlay>,
@@ -177,14 +196,17 @@ impl App {
             .as_deref()
             .and_then(|f| capture::cached_capabilities(f, &config))
             .unwrap_or_default();
-        let recovered = ffmpeg
-            .as_deref()
-            .and_then(|f| recorder::recover_leftovers(f, &settings.clips_dir).ok().flatten());
+        let recovered = ffmpeg.as_deref().and_then(|f| {
+            recorder::recover_leftovers(f, &settings.clips_dir)
+                .ok()
+                .flatten()
+        });
         let free_bytes = platform::free_bytes(&settings.clips_dir).unwrap_or(0);
         let mut app = Self {
             index: Index::load(&config),
             config,
             settings,
+            session_settings: None,
             ffmpeg,
             recorder,
             clips: Vec::new(),
@@ -192,6 +214,9 @@ impl App {
             next_id: 1,
             indexing: false,
             busy: false,
+            exports: jobs::Queue::default(),
+            audio_test: audio_test::Test::default(),
+            dragging: None,
             recording: false,
             elapsed: 0,
             status: String::new(),
@@ -210,7 +235,7 @@ impl App {
             tray_hint_shown: false,
             autostart: platform::autostart_enabled(),
             notice: Notice::default(),
-            pending_start: false,
+            capture: lifecycle::CaptureControl::default(),
             recovered,
             watcher: None,
             overlay: None,
@@ -245,6 +270,14 @@ impl App {
         capture::choose_display(&self.displays, wanted)
     }
 
+    fn runtime_settings(&self) -> &Settings {
+        if self.recording || self.capture.transitioning {
+            self.session_settings.as_ref().unwrap_or(&self.settings)
+        } else {
+            &self.settings
+        }
+    }
+
     fn thumbnail_dir(&self) -> PathBuf {
         self.config.join("thumbs")
     }
@@ -264,7 +297,11 @@ impl App {
         };
         let display = self.capture_display();
         let (x, y, limit) = match display {
-            Some(d) => (d.x + d.width as i32 - 28, d.y + 28, (d.width as i32 / 2).max(320)),
+            Some(d) => (
+                d.x + d.width as i32 - 28,
+                d.y + 28,
+                (d.width as i32 / 2).max(320),
+            ),
             None => (1880, 28, 600),
         };
         overlay.show(text, error, x, y, limit);
@@ -294,7 +331,14 @@ impl App {
         };
         if !self.window_visible {
             if let Some(tray) = &self.tray {
-                tray.notify(if error { "Stillclip – Hinweis" } else { "Stillclip" }, text);
+                tray.notify(
+                    if error {
+                        "Stillclip – Hinweis"
+                    } else {
+                        "Stillclip"
+                    },
+                    text,
+                );
             }
         }
     }
@@ -302,22 +346,22 @@ impl App {
     /// Deletes the oldest clips when the folder outgrew its limit. Only runs
     /// when the user set one; the newest clip always survives.
     fn enforce_storage_limit(&mut self, clips: &mut Vec<Clip>) {
-        let doomed = library::over_limit(clips, self.settings.storage_limit_bytes());
-        if doomed.is_empty() {
-            return;
-        }
-        let mut freed = 0;
-        let mut count = 0;
-        for clip in &doomed {
-            if fs::remove_file(&clip.path).is_ok() {
-                freed += clip.bytes;
-                count += 1;
-            }
-        }
+        let (count, freed, failed) = library::clean_limit_except(
+            clips,
+            self.settings.storage_limit_bytes(),
+            &self.index.favorites,
+            |path| fs::remove_file(path),
+        );
         if count == 0 {
+            if failed > 0 {
+                self.notify(
+                    "Einige Clips konnten nicht gelöscht werden. Sie bleiben in der Bibliothek.",
+                    true,
+                    None,
+                );
+            }
             return;
         }
-        clips.retain(|clip| !doomed.iter().any(|gone| gone.path == clip.path));
         let text = if count == 1 {
             format!(
                 "Der älteste Clip wurde gelöscht, damit der Ordner unter {} GB bleibt ({} frei).",
@@ -331,13 +375,24 @@ impl App {
                 recorder::format_bytes(freed)
             )
         };
-        self.notify(&text, false, None);
+        let text = if failed > 0 {
+            format!("{text} {failed} Clips konnten nicht gelöscht werden und bleiben erhalten.")
+        } else {
+            text
+        };
+        self.notify(&text, failed > 0, None);
     }
 
     fn refresh(&mut self) {
         match library::scan_clips(&self.settings.clips_dir) {
             Ok(mut clips) => {
-                self.enforce_storage_limit(&mut clips);
+                if !self.busy
+                    && !self.capture.transitioning
+                    && self.exports.is_empty()
+                    && self.dragging.is_none()
+                {
+                    self.enforce_storage_limit(&mut clips);
+                }
                 self.clips_bytes = clips.iter().map(|clip| clip.bytes).sum();
                 let previous: HashMap<_, _> = self
                     .clips
@@ -360,9 +415,14 @@ impl App {
                     .collect();
                 let thumbs = self.thumbnail_dir();
                 let plain: Vec<Clip> = self.clips.iter().map(|(_, c)| c.clone()).collect();
-                self.index.prune(&plain, &thumbs);
+                // Keep source metadata until an in-flight rename has moved it.
+                if !self.busy {
+                    self.index.prune(&plain, &thumbs);
+                }
                 self.update_media_map();
-                self.schedule_indexing();
+                if !self.busy && !self.capture.transitioning {
+                    self.schedule_indexing();
+                }
             }
             Err(error) => self.message(Err(error)),
         }
@@ -371,6 +431,12 @@ impl App {
     fn update_media_map(&self) {
         if let Ok(mut files) = self.media.write() {
             files.clear();
+            if let Some(preview) = &self.audio_test.preview {
+                files.insert(
+                    format!("audio-test/{}", self.audio_test.id),
+                    preview.path.clone(),
+                );
+            }
             let thumbs = self.thumbnail_dir();
             for (id, clip) in &self.clips {
                 files.insert(id.to_string(), clip.path.clone());
@@ -424,10 +490,13 @@ impl App {
             for (key, path, bytes, modified, thumbnail) in pending {
                 let entry = match recorder::probe_media(&ffmpeg, &path) {
                     Ok(info) => {
-                        let at = (info.duration * 0.15).clamp(0.0, 3.0).min((info.duration - 0.1).max(0.0));
+                        let at = (info.duration * 0.15)
+                            .clamp(0.0, 3.0)
+                            .min((info.duration - 0.1).max(0.0));
                         let thumbnail_path = thumbs.join(&thumbnail);
                         let has_thumbnail = thumbnail_path.is_file()
-                            || recorder::make_thumbnail(&ffmpeg, &path, &thumbnail_path, at).is_ok();
+                            || recorder::make_thumbnail(&ffmpeg, &path, &thumbnail_path, at)
+                                .is_ok();
                         IndexEntry {
                             bytes,
                             modified,
@@ -455,8 +524,39 @@ impl App {
         });
     }
 
+    fn annotation(&self, path: &Path) -> library::Annotation {
+        self.index
+            .annotations
+            .get(&library::index_key(path))
+            .cloned()
+            .unwrap_or_else(|| {
+                let name = path.file_stem().unwrap_or_default().to_string_lossy();
+                static BUILTIN: std::sync::OnceLock<Vec<GameEntry>> = std::sync::OnceLock::new();
+                let game = BUILTIN
+                    .get_or_init(games::builtin_games)
+                    .iter()
+                    .chain(&self.settings.custom_games)
+                    .filter(|g| {
+                        name.strip_prefix(g.name.as_str())
+                            .is_some_and(|tail| tail.starts_with([' ', '_', '-']))
+                    })
+                    .max_by_key(|g| g.name.len())
+                    .map(|g| g.name.clone())
+                    .unwrap_or_default();
+                library::Annotation {
+                    game,
+                    tags: Vec::new(),
+                }
+            })
+    }
+
+    fn clip_locked(&self, path: &Path) -> bool {
+        self.exports.uses(path) || self.dragging.as_ref().is_some_and(|(p, _)| p == path)
+    }
+
     fn clip_json(&self, id: u64, clip: &Clip) -> Value {
         let entry = self.index.current(clip);
+        let annotation = self.annotation(&clip.path);
         json!({
             "id": id,
             "name": clip.name,
@@ -471,6 +571,10 @@ impl App {
             "audio": entry.map(|e| e.info.audio),
             // Marked moments are kept by path, so they show before the clip is indexed.
             "markers": self.markers_of(&clip.path),
+            "favorite": self.index.favorites.contains(&library::index_key(&clip.path)),
+            "locked": self.clip_locked(&clip.path),
+            "game": annotation.game,
+            "tags": annotation.tags,
             "pending": entry.is_none(),
             "path": clip.path,
         })
@@ -499,18 +603,33 @@ impl App {
                 })
             })
             .collect();
-        let selected_encoder = capture::select_encoder(self.settings.encoder, &self.capabilities.encoders);
+        let selected_encoder =
+            capture::select_encoder(self.settings.encoder, &self.capabilities.encoders);
         let state = json!({
             "clips": clips,
             "recording": self.recording,
             "elapsed": self.elapsed,
-            "busy": self.busy,
+            "busy": self.busy || self.capture.transitioning,
+            "capture_busy": self.capture.transitioning,
+            "exports": self.exports.views(),
+            "audio_test": self.audio_test.state(),
+            "dragging": self.dragging.is_some(),
+            "export_limit": jobs::LIMIT,
             "status": self.status,
             "error": self.error,
             "ffmpeg_available": self.ffmpeg.is_some(),
             "ffmpeg_path": self.ffmpeg,
             "clips_dir": self.settings.clips_dir,
             "settings": self.settings,
+            "runtime_settings": {
+                "quality": self.runtime_settings().quality,
+                "fps": self.runtime_settings().fps,
+                "replay_seconds": self.runtime_settings().replay_seconds,
+                "microphone": self.runtime_settings().microphone,
+                "system_audio": self.runtime_settings().system_audio,
+                "capture_window": self.runtime_settings().capture_window,
+                "game_audio": self.runtime_settings().game_audio,
+            },
             "autostart": self.autostart,
             "active_game": self.active_game,
             "active_game_display": self.active_game_display,
@@ -524,11 +643,13 @@ impl App {
             "capabilities": {
                 "probed": self.capabilities.probed,
                 "ddagrab": self.capabilities.ddagrab,
+                "gfxcapture": self.capabilities.gfxcapture,
                 "encoders": self.capabilities.encoders.iter().map(|e| e.id()).collect::<Vec<_>>(),
             },
             "encoders": encoders,
             "selected_encoder": selected_encoder.label(),
             "session": self.session,
+            "diagnostics": self.recorder.as_ref().and_then(|r| r.diagnostics()),
             "markers": self.marker_json(),
             "buffer_bytes": self.buffer_bytes,
             "free_bytes": self.free_bytes,
@@ -582,7 +703,9 @@ impl App {
     }
 
     fn clip_path(&self, command: &Value) -> Result<PathBuf, String> {
-        let id = command["id"].as_u64().ok_or("Bitte einen Clip auswählen.")?;
+        let id = command["id"]
+            .as_u64()
+            .ok_or("Bitte einen Clip auswählen.")?;
         self.clips
             .iter()
             .find(|(key, _)| *key == id)
@@ -590,121 +713,177 @@ impl App {
             .ok_or_else(|| "Der Clip ist nicht mehr in der Bibliothek. Bitte aktualisieren.".into())
     }
 
-    fn session_config(&self) -> Result<SessionConfig, String> {
-        let display = self
+    fn session_config(&mut self) -> Result<SessionConfig, String> {
+        let exe = self
+            .active_game
+            .as_ref()
+            .map(|g| g.exe.as_str())
+            .unwrap_or(&self.settings.target_exe);
+        let settings = self.settings.for_game(exe);
+        let mut display = self
             .capture_display()
             .cloned()
             .ok_or("Es wurde kein Bildschirm gefunden.")?;
-        Ok(SessionConfig {
+        let target = if settings.capture_window || (settings.system_audio && settings.game_audio) {
+            Some(games::visible_apps().into_iter().find(|app| self.active_game.as_ref().map_or(app.exe == settings.target_exe, |game| game.matches(app)))
+                .ok_or("Starte das Spiel oder wähle unter Aufnahme ein laufendes Zielprogramm aus.")?)
+        } else {
+            None
+        };
+        if settings.capture_window {
+            let window = target.as_ref().ok_or("Kein Aufnahmefenster gewählt.")?;
+            let (w, h) = games::window_size(window.hwnd, window.pid)
+                .ok_or("Das Aufnahmefenster ist geschlossen oder minimiert.")?;
+            display.width = w;
+            display.height = h;
+        }
+        let config = SessionConfig {
+            window: target.clone().filter(|_| settings.capture_window),
+            audio_process: target
+                .as_ref()
+                .filter(|_| settings.system_audio && settings.game_audio)
+                .map(|app| app.pid),
             display,
             encoder: capture::select_encoder(self.settings.encoder, &self.capabilities.encoders),
             capabilities: self.capabilities.clone(),
-            fps: self.settings.fps,
-            quality: self.settings.quality,
+            fps: settings.fps,
+            quality: settings.quality,
             show_cursor: self.settings.show_cursor,
-            system_audio: self.settings.system_audio,
-            microphone: self
-                .settings
+            system_audio: settings.system_audio,
+            microphone: settings
                 .microphone
                 .then(|| self.settings.microphone_device.clone()),
             microphone_separate_track: self.settings.microphone_separate_track,
             system_gain: settings::gain(self.settings.system_volume),
             microphone_gain: settings::gain(self.settings.microphone_volume),
-            replay_seconds: self.settings.buffer_seconds(),
+            replay_seconds: settings.buffer_seconds(),
             keep_full_session: self.settings.keep_full_session,
             min_free_bytes: self.settings.min_free_bytes(),
             precise_clips: self.settings.precise_clips,
             clips_dir: self.settings.clips_dir.clone(),
-        })
+        };
+        self.session_settings = Some(settings);
+        Ok(config)
     }
 
     fn recording_job(&mut self, action: &str, proxy: EventLoopProxy<AppEvent>) {
-        if action == "start" && !self.capabilities.probed && self.ffmpeg.is_some() {
-            self.pending_start = true;
-            self.status = "FFmpeg wird geprüft, die Aufnahme startet gleich…".into();
-            self.error = false;
+        if action == "start" && self.audio_test.active.is_some() {
+            self.message(Err("Beende zuerst den Audio-Test.".into()));
             return;
         }
-        let Some(mut recorder) = self.recorder.take() else {
-            self.message(Err("Bitte zuerst FFmpeg in den Einstellungen auswählen.".into()));
+        if matches!(action, "start" | "stop") {
+            self.capture.request(action == "start");
+            self.advance_capture(proxy);
             return;
+        }
+        if self.busy || self.capture.transitioning {
+            return;
+        }
+        let seconds = if action == "replay_long" && self.settings.replay_seconds_long > 0 {
+            self.settings.replay_seconds_long
+        } else {
+            self.runtime_settings().replay_seconds
         };
-        let config = match self.session_config() {
-            Ok(config) => config,
+        let prefix = self.clip_prefix();
+        let export = self
+            .recorder
+            .as_mut()
+            .ok_or_else(|| "Bitte zuerst FFmpeg auswählen.".to_string())
+            .and_then(|recorder| recorder.prepare_replay(seconds, &prefix));
+        let export = match export {
+            Ok(export) => export,
             Err(error) => {
-                self.recorder = Some(recorder);
                 self.message(Err(error));
                 return;
             }
         };
-        self.busy = true;
+        let marks: Vec<f64> = self.markers.iter().map(|marker| marker.at).collect();
+        let events = proxy.clone();
+        self.file_job(proxy, "Moment wird gesichert…", move || {
+            export.run().map(|saved| {
+                send_markers(
+                    &events,
+                    &saved.path,
+                    &marks,
+                    saved.start,
+                    f64::from(seconds),
+                );
+                JobOutcome {
+                    message: "Moment gesichert.".into(),
+                    saved: Some(saved.path),
+                    session: None,
+                    replay: true,
+                }
+            })
+        });
+    }
+
+    /// Capture transitions are independent of file jobs. A stop requested while
+    /// starting is retained; probing also cannot resurrect a cancelled start.
+    fn advance_capture(&mut self, proxy: EventLoopProxy<AppEvent>) {
+        if self.capture.wants_start() && !self.capabilities.probed && self.ffmpeg.is_some() {
+            self.status = "FFmpeg wird geprüft, die Aufnahme startet gleich…".into();
+            return;
+        }
+        let Some(start) = self.capture.next(self.recording) else {
+            return;
+        };
+        let config = if start {
+            match self.session_config() {
+                Ok(config) => Some(config),
+                Err(error) => {
+                    self.message(Err(error));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let Some(mut recorder) = self.recorder.take() else {
+            self.message(Err(
+                "Bitte zuerst FFmpeg in den Einstellungen auswählen.".into()
+            ));
+            return;
+        };
+        if start {
+            self.markers.clear();
+            self.buffered = None;
+        }
+        self.capture.transitioning = true;
         self.error = false;
-        self.status = match action {
-            "start" => "Aufnahme wird gestartet…",
-            "stop" if self.settings.keep_full_session => "Aufnahme wird gespeichert…",
-            "stop" => "Aufnahme wird beendet…",
-            _ => "Moment wird gesichert…",
+        self.status = if start {
+            "Aufnahme wird gestartet…"
+        } else {
+            "Aufnahme wird beendet…"
         }
         .into();
-        let action = action.to_owned();
-        let replay_seconds = if action == "replay_long" && self.settings.replay_seconds_long > 0 {
-            self.settings.replay_seconds_long
-        } else {
-            self.settings.replay_seconds
-        };
-        let prefix = self.clip_prefix();
-        let game = self.active_game.as_ref().map(|g| g.name.clone());
         let marks: Vec<f64> = self.markers.iter().map(|marker| marker.at).collect();
         let elapsed = self.elapsed as f64;
         std::thread::spawn(move || {
-            let result = match action.as_str() {
-                "start" => recorder.start(config).map(|info| JobOutcome {
-                    message: match &game {
-                        Some(game) => format!(
-                            "{game} läuft – Aufnahme über {}. Drücke deine Taste, um die letzten {replay_seconds} Sekunden zu sichern.",
-                            info.strategy
-                        ),
-                        None => format!(
-                            "Aufnahme läuft über {}. Drücke deine Taste, um die letzten {replay_seconds} Sekunden zu sichern.",
-                            info.strategy
-                        ),
-                    },
+            let result = if let Some(config) = config {
+                recorder.start(config).map(|info| JobOutcome {
+                    message: format!("Aufnahme läuft über {}.", info.strategy),
                     saved: None,
                     session: Some(info),
                     replay: false,
-                }),
-                "stop" => recorder.stop().map(|saved| {
-                    // The session video starts where the recording did, so the
-                    // marks keep their own times.
+                })
+            } else {
+                recorder.stop().map(|saved| {
                     if let Some(path) = &saved {
                         send_markers(&proxy, path, &marks, 0.0, elapsed + 5.0);
                     }
                     JobOutcome {
-                        message: match &saved {
-                            Some(_) => "Aufnahme beendet und als Video gespeichert.".into(),
-                            None => "Aufnahme beendet.".into(),
-                        },
+                        message: if saved.is_some() {
+                            "Aufnahme beendet und gespeichert."
+                        } else {
+                            "Aufnahme beendet."
+                        }
+                        .into(),
                         saved,
                         session: None,
                         replay: false,
                     }
-                }),
-                _ => recorder.save_replay(replay_seconds, &prefix).map(|saved| {
-                    send_markers(&proxy, &saved.path, &marks, saved.start, f64::from(replay_seconds));
-                    JobOutcome {
-                        message: format!("Die letzten {replay_seconds} Sekunden sind gesichert."),
-                        saved: Some(saved.path),
-                        session: None,
-                        replay: true,
-                    }
-                }),
-            };
-            let result = match (result, recorder.take_warning()) {
-                (Ok(mut outcome), Some(warning)) => {
-                    outcome.message = format!("{} {warning}", outcome.message);
-                    Ok(outcome)
-                }
-                (other, _) => other,
+                })
             };
             let _ = proxy.send_event(AppEvent::Finished(JobResult {
                 recorder: Some(recorder),
@@ -718,11 +897,17 @@ impl App {
     /// nothing while playing: no file is written and the recording runs on.
     fn mark(&mut self) {
         let Some(recorder) = self.recorder.as_ref() else {
-            self.message(Err("Bitte zuerst FFmpeg in den Einstellungen auswählen.".into()));
+            self.message(Err(
+                "Bitte zuerst FFmpeg in den Einstellungen auswählen.".into()
+            ));
             return;
         };
         if !recorder.is_recording() {
-            self.notify("Es läuft keine Aufnahme. Starte zuerst die Aufnahme.", true, None);
+            self.notify(
+                "Es läuft keine Aufnahme. Starte zuerst die Aufnahme.",
+                true,
+                None,
+            );
             return;
         }
         let at = recorder.elapsed().as_secs_f64();
@@ -760,7 +945,11 @@ impl App {
         if offsets.is_empty() {
             return;
         }
-        let entry = self.index.entries.entry(library::index_key(path)).or_default();
+        let entry = self
+            .index
+            .entries
+            .entry(library::index_key(path))
+            .or_default();
         entry.markers = offsets;
         self.index.save(&self.config);
     }
@@ -771,44 +960,33 @@ impl App {
             self.message(Err("Die Markierung gibt es nicht mehr.".into()));
             return;
         };
-        let Some(mut recorder) = self.recorder.take() else {
-            self.message(Err("Bitte zuerst FFmpeg in den Einstellungen auswählen.".into()));
-            return;
-        };
-        self.busy = true;
-        self.error = false;
-        self.status = "Markierter Moment wird gesichert…".into();
-        self.pending_marker = Some(id);
         let before = f64::from(self.settings.marker_before);
         let after = f64::from(self.settings.marker_after);
+        let export = self
+            .recorder
+            .as_mut()
+            .ok_or_else(|| "Bitte zuerst FFmpeg auswählen.".to_string())
+            .and_then(|recorder| recorder.prepare_marker(marker.at, before, after, &marker.prefix));
+        let export = match export {
+            Ok(export) => export,
+            Err(error) => {
+                self.message(Err(error));
+                return;
+            }
+        };
+        self.pending_marker = Some(id);
         let marks: Vec<f64> = self.markers.iter().map(|marker| marker.at).collect();
-        std::thread::spawn(move || {
-            let result = recorder
-                .save_marker(marker.at, before, after, &marker.prefix)
-                .map(|saved| {
-                    send_markers(&proxy, &saved.path, &marks, saved.start, before + after);
-                    JobOutcome {
-                        message: format!(
-                            "Der markierte Moment ist gesichert ({} Sekunden).",
-                            (before + after).round()
-                        ),
-                        saved: Some(saved.path),
-                        session: None,
-                        replay: true,
-                    }
-                });
-            let result = match (result, recorder.take_warning()) {
-                (Ok(mut outcome), Some(warning)) => {
-                    outcome.message = format!("{} {warning}", outcome.message);
-                    Ok(outcome)
+        let events = proxy.clone();
+        self.file_job(proxy, "Markierter Moment wird gesichert…", move || {
+            export.run().map(|saved| {
+                send_markers(&events, &saved.path, &marks, saved.start, before + after);
+                JobOutcome {
+                    message: "Markierter Moment gesichert.".into(),
+                    saved: Some(saved.path),
+                    session: None,
+                    replay: true,
                 }
-                (other, _) => other,
-            };
-            let _ = proxy.send_event(AppEvent::Finished(JobResult {
-                recorder: Some(recorder),
-                restore_recorder: true,
-                result,
-            }));
+            })
         });
     }
 
@@ -817,20 +995,21 @@ impl App {
     fn handle_issue(&mut self, issue: recorder::PollIssue, proxy: EventLoopProxy<AppEvent>) {
         self.message(Err(issue.message.clone()));
         self.notify(&issue.message, true, None);
-        if issue.low_disk {
-            self.banner("Speicherplatz knapp – Aufnahme wird beendet", true);
-            if self.recording && !self.busy {
+        if issue.stop_requested {
+            self.banner("Aufnahme wird beendet", true);
+            if self.recording {
                 self.auto_started = false;
                 self.recording_job("stop", proxy);
             }
             return;
         }
         self.refresh();
-        if !issue.capture_lost || self.busy || self.ffmpeg.is_none() {
+        if !issue.capture_lost || self.closing || self.ffmpeg.is_none() {
             return;
         }
         let now = Instant::now();
-        self.restarts.retain(|at| now.duration_since(*at) < RESTART_WINDOW);
+        self.restarts
+            .retain(|at| now.duration_since(*at) < RESTART_WINDOW);
         if self.restarts.len() >= MAX_RESTARTS {
             self.notify(
                 "Die Aufnahme ist mehrfach abgebrochen und wird nicht weiter neu gestartet.",
@@ -860,6 +1039,148 @@ impl App {
                 result: task(),
             }));
         });
+    }
+
+    fn cancel_background(&mut self) {
+        self.exports.cancel_all();
+        self.audio_test.cancel();
+        if let Some((_, flag)) = &self.dragging {
+            flag.cancel();
+        }
+    }
+
+    fn start_audio_test(
+        &mut self,
+        command: &Value,
+        proxy: EventLoopProxy<AppEvent>,
+    ) -> Result<(), String> {
+        if self.audio_test.active.is_some() || self.recording || self.capture.transitioning {
+            return Err("Beende zuerst die Aufnahme oder den laufenden Audio-Test.".into());
+        }
+        let ffmpeg = self
+            .ffmpeg
+            .clone()
+            .ok_or("Bitte zuerst FFmpeg auswählen.")?;
+        let mut prefs: Settings = serde_json::from_value(command["settings"].clone())
+            .map_err(|e| format!("Ungültige Audio-Einstellungen: {e}"))?;
+        prefs = prefs.sanitized();
+        let exe = self
+            .active_game
+            .as_ref()
+            .map(|g| g.exe.as_str())
+            .unwrap_or(&prefs.target_exe);
+        let prefs = prefs.for_game(exe);
+        let mut sources = Vec::new();
+        if prefs.system_audio {
+            let source = if prefs.game_audio {
+                let target = games::visible_apps()
+                    .into_iter()
+                    .find(|app| {
+                        self.active_game
+                            .as_ref()
+                            .map_or(app.exe == prefs.target_exe, |game| game.matches(app))
+                    })
+                    .ok_or("Starte das Zielspiel für den Spielton-Test.")?;
+                audio::AudioSource::Process { pid: target.pid }
+            } else {
+                audio::AudioSource::Loopback
+            };
+            sources.push((source, settings::gain(prefs.system_volume)));
+        }
+        if prefs.microphone {
+            sources.push((
+                audio::AudioSource::Microphone {
+                    device_id: prefs.microphone_device,
+                },
+                settings::gain(prefs.microphone_volume),
+            ));
+        }
+        if sources.is_empty() {
+            return Err("Aktiviere Systemton oder Mikrofon für den Audio-Test.".into());
+        }
+        self.audio_test.id += 1;
+        let id = self.audio_test.id;
+        self.audio_test.preview = None;
+        self.audio_test.error = None;
+        self.audio_test.levels.clear();
+        self.audio_test.meters.clear();
+        self.update_media_map();
+        let control = jobs::Control::new();
+        self.audio_test.active = Some(control.clone());
+        let root = self.config.join("previews");
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                audio_test::record(&ffmpeg, &root, sources, control, |meters| {
+                    let _ = proxy.send_event(AppEvent::AudioMeters(id, meters));
+                })
+            }))
+            .unwrap_or_else(|_| Err("Der Audio-Test wurde unerwartet beendet.".into()));
+            let _ = proxy.send_event(AppEvent::AudioFinished(id, result));
+        });
+        Ok(())
+    }
+
+    fn queue_export(
+        &mut self,
+        label: String,
+        sources: Vec<PathBuf>,
+        task: jobs::Work,
+        proxy: EventLoopProxy<AppEvent>,
+    ) {
+        match self.exports.push(label, sources, task) {
+            Ok(()) => {
+                self.message(Ok("Export zur Warteschlange hinzugefügt.".into()));
+                self.start_exports(proxy);
+            }
+            Err(error) => self.message(Err(error)),
+        }
+    }
+
+    fn start_exports(&mut self, proxy: EventLoopProxy<AppEvent>) {
+        if self.busy || self.closing {
+            return;
+        }
+        let Some((job, control)) = self.exports.start_next() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (job.work)(control.clone())
+            }))
+            .unwrap_or_else(|_| Err("Der Export wurde unerwartet beendet.".into()));
+            if result.is_ok() {
+                control.progress(1.0, "Gespeichert");
+            }
+            let _ = proxy.send_event(AppEvent::ExportFinished(job.id, result));
+        });
+    }
+
+    fn finish_export(
+        &mut self,
+        id: u64,
+        result: Result<JobOutcome, String>,
+        proxy: EventLoopProxy<AppEvent>,
+    ) {
+        if !self.exports.finish(id) {
+            return;
+        }
+        match result {
+            Ok(outcome) => {
+                self.message(Ok(outcome.message.clone()));
+                self.notify(&outcome.message, false, outcome.saved);
+            }
+            Err(error) => {
+                let cancelled = error == jobs::CANCELLED;
+                self.message(if cancelled {
+                    Ok(error.clone())
+                } else {
+                    Err(error.clone())
+                });
+                self.notify(&error, !cancelled, None);
+            }
+        }
+        self.start_exports(proxy);
+        self.refresh();
     }
 
     fn apply_hotkeys(&mut self) {
@@ -899,19 +1220,13 @@ impl App {
             settings.clips_dir = self.settings.clips_dir.clone();
         }
         let settings = settings.sanitized();
-        let restricted = self.recording
-            && (settings.fps != self.settings.fps
-                || settings.quality != self.settings.quality
-                || settings.encoder != self.settings.encoder
-                || settings.display != self.settings.display
-                || settings.show_cursor != self.settings.show_cursor
-                || settings.system_audio != self.settings.system_audio
-                || settings.microphone != self.settings.microphone
-                || settings.microphone_device != self.settings.microphone_device
-                || settings.system_volume != self.settings.system_volume
-                || settings.microphone_volume != self.settings.microphone_volume
-                || settings.keep_full_session != self.settings.keep_full_session
-                || settings.clips_dir != self.settings.clips_dir);
+        if !self.exports.is_empty() && settings.clips_dir != self.settings.clips_dir {
+            self.message(Err(
+                "Beende zuerst die Exportliste, bevor du den Clip-Ordner änderst.".into(),
+            ));
+            return;
+        }
+        let restricted = self.recording && self.settings.capture_changed(&settings);
         if restricted {
             self.message(Err(
                 "Aufnahme-Einstellungen gelten erst nach dem Beenden der laufenden Aufnahme. Bitte zuerst die Aufnahme beenden.".into(),
@@ -953,19 +1268,102 @@ impl App {
 
     fn action(&mut self, command: Value, hwnd: isize, proxy: EventLoopProxy<AppEvent>) {
         let action = command["action"].as_str().unwrap_or("");
-        if action == "ready" {
-            return;
-        }
-        if self.busy {
-            if matches!(
-                action,
-                "start" | "stop" | "toggle" | "replay" | "replay_long" | "save_marker"
-            ) {
-                self.message(Err("Einen Moment, der letzte Vorgang läuft noch.".into()));
+        if action == "cancel_export" {
+            if let Some(id) = command["id"].as_u64() {
+                self.exports.cancel(id);
             }
             return;
         }
+        if action == "cancel_audio_test" {
+            self.audio_test.cancel();
+            return;
+        }
+        if self.closing {
+            return;
+        }
+        if action == "ready" {
+            return;
+        }
         match action {
+            "start" | "stop" => {
+                self.recording_job(action, proxy);
+                return;
+            }
+            "toggle" => {
+                let next = if self.recording || self.capture.transitioning {
+                    "stop"
+                } else {
+                    "start"
+                };
+                self.recording_job(next, proxy);
+                return;
+            }
+            "mark" if !self.capture.transitioning => {
+                self.mark();
+                return;
+            }
+            _ => {}
+        }
+        if self.busy || self.capture.transitioning {
+            self.message(Err("Einen Moment, der letzte Vorgang läuft noch.".into()));
+            return;
+        }
+        if matches!(action, "rename" | "delete")
+            && self
+                .clip_path(&command)
+                .ok()
+                .is_some_and(|path| self.clip_locked(&path))
+        {
+            self.message(Err("Dieser Clip wird noch für einen Export benötigt. Beende oder entferne den Auftrag zuerst.".into()));
+            return;
+        }
+        if matches!(action, "choose_folder" | "choose_ffmpeg")
+            && (!self.exports.is_empty()
+                || self.audio_test.active.is_some()
+                || self.dragging.is_some())
+        {
+            self.message(Err("Beende zuerst die Exportliste.".into()));
+            return;
+        }
+        match action {
+            "audio_test" => {
+                if let Err(error) = self.start_audio_test(&command, proxy) {
+                    self.message(Err(error.clone()));
+                    self.audio_test.error = Some(error);
+                }
+            }
+            "drag_clip" => {
+                if self.dragging.is_none() {
+                    match self.clip_path(&command) {
+                        Ok(path) => {
+                            let cancel = drag::Control::default();
+                            self.dragging = Some((path.clone(), cancel.clone()));
+                            std::thread::spawn(move || {
+                                let _ = proxy
+                                    .send_event(AppEvent::DragFinished(drag::file(&path, cancel)));
+                            });
+                        }
+                        Err(e) => self.message(Err(e)),
+                    }
+                }
+            }
+            "annotate" => {
+                let result = self.clip_path(&command).and_then(|path| {
+                    let tags = command["tags"]
+                        .as_array()
+                        .ok_or("Tags fehlen.")?
+                        .iter()
+                        .map(|t| t.as_str().map(str::to_owned).ok_or("Ungültiger Tag."))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let value = library::Annotation::normalized(
+                        command["game"].as_str().unwrap_or(""),
+                        &tags,
+                    )?;
+                    self.index
+                        .annotate(library::index_key(&path), value, &self.config)
+                });
+                self.message(result.map(|_| "Spiel und Tags gespeichert.".into()));
+            }
             "refresh" => self.refresh(),
             "rescan" => {
                 self.displays = capture::displays();
@@ -1019,7 +1417,8 @@ impl App {
                         Ok(()) => {
                             self.settings = settings;
                             self.message(Ok(
-                                "Clip-Ordner geändert. Bisherige Clips bleiben im alten Ordner.".into(),
+                                "Clip-Ordner geändert. Bisherige Clips bleiben im alten Ordner."
+                                    .into(),
                             ));
                             self.refresh();
                         }
@@ -1041,7 +1440,9 @@ impl App {
                             self.ffmpeg = Some(path);
                             self.capabilities = Capabilities::default();
                             self.probe_capabilities(proxy);
-                            self.message(Ok("FFmpeg-Pfad gespeichert. Encoder werden geprüft…".into()));
+                            self.message(Ok(
+                                "FFmpeg-Pfad gespeichert. Encoder werden geprüft…".into()
+                            ));
                             self.refresh();
                         }
                         Err(error) => self.message(Err(error.to_string())),
@@ -1070,7 +1471,11 @@ impl App {
             }
             "pick_game" => {
                 if let Some(path) = platform::pick_program(hwnd) {
-                    let exe = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                    let exe = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
                     let name = games::display_name(&games::normalize_exe(&exe));
                     self.add_game(GameEntry::new(&exe, &name));
                 }
@@ -1108,14 +1513,18 @@ impl App {
                 }
             }
             "delete" => match self.clip_path(&command) {
-                Ok(path) => self.file_job(proxy, "Clip wird in den Papierkorb verschoben…", move || {
-                    platform::recycle(&path).map(|_| JobOutcome {
-                        message: "Clip in den Papierkorb verschoben.".into(),
-                        saved: None,
-                        session: None,
-                        replay: false,
-                    })
-                }),
+                Ok(path) => self.file_job(
+                    proxy,
+                    "Clip wird in den Papierkorb verschoben…",
+                    move || {
+                        platform::recycle(&path).map(|_| JobOutcome {
+                            message: "Clip in den Papierkorb verschoben.".into(),
+                            saved: None,
+                            session: None,
+                            replay: false,
+                        })
+                    },
+                ),
                 Err(error) => self.message(Err(error)),
             },
             "reveal" => match self.clip_path(&command) {
@@ -1134,36 +1543,127 @@ impl App {
                 }
                 Err(error) => self.message(Err(error)),
             },
+            "highlights" => {
+                let result = command["pieces"]
+                    .as_array()
+                    .ok_or("Wähle zuerst Ausschnitte aus.".to_string())
+                    .and_then(|items| {
+                        if items.is_empty() || items.len() > highlights::MAX_PIECES {
+                            return Err("Ein Highlight darf 1 bis 20 Ausschnitte enthalten.".into());
+                        }
+                        items
+                            .iter()
+                            .map(|item| {
+                                let path = self.clip_path(item)?;
+                                Ok(highlights::Piece {
+                                    crop: parse_crop(&item["crop"])?,
+                                    markers: self.markers_of(&path),
+                                    path,
+                                    start: item["start"].as_f64().unwrap_or(f64::NAN),
+                                    end: item["end"].as_f64().unwrap_or(f64::NAN),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, String>>()
+                    });
+                match (result, self.ffmpeg.clone()) {
+                    (Ok(pieces), Some(ffmpeg)) => {
+                        let profile = discord::Profile::from_id(
+                            command["mode"].as_str().unwrap_or("precise"),
+                        );
+                        let width = match command["portrait_width"].as_u64() {
+                            Some(720) => Some(720),
+                            Some(1080) => Some(1080),
+                            _ if command["portrait_width"].is_null() => None,
+                            _ => {
+                                self.message(Err("Ungültiges Hochkantformat.".into()));
+                                return;
+                            }
+                        };
+                        let dir = self.settings.clips_dir.clone();
+                        let sources = pieces.iter().map(|p| p.path.clone()).collect();
+                        let events = proxy.clone();
+                        self.queue_export(format!("Highlights · {} Ausschnitte", pieces.len()), sources, Box::new(move |control| {
+                            let output = unique_trim_path(&dir, "Highlights", profile.map_or("Mix", |p| p.suffix()));
+                            let markers = highlights::export_controlled(&ffmpeg, &pieces, &output, profile, width, &control)?;
+                            let _ = events.send_event(AppEvent::ClipMarkers(output.clone(), markers));
+                            Ok(JobOutcome { message: "Highlight-Clip gespeichert. Die Originale bleiben erhalten.".into(), saved: Some(output), session: None, replay: false })
+                        }), proxy);
+                    }
+                    (Err(error), _) => self.message(Err(error)),
+                    (_, None) => self.message(Err("Bitte zuerst FFmpeg auswählen.".into())),
+                }
+            }
+            "favorite" => match self.clip_path(&command) {
+                Ok(path) => {
+                    let key = library::index_key(&path);
+                    if command["favorite"].as_bool().unwrap_or(false) {
+                        self.index.favorites.insert(key);
+                    } else {
+                        self.index.favorites.remove(&key);
+                    }
+                    self.index.save(&self.config);
+                }
+                Err(error) => self.message(Err(error)),
+            },
             "trim" => match (self.clip_path(&command), self.ffmpeg.clone()) {
                 (Ok(path), Some(ffmpeg)) => {
                     let start = command["start"].as_f64().unwrap_or(f64::NAN);
                     let end = command["end"].as_f64().unwrap_or(f64::NAN);
+                    let crop = match parse_crop(&command["crop"]) {
+                        Ok(crop) => crop,
+                        Err(error) => {
+                            self.message(Err(error));
+                            return;
+                        }
+                    };
+                    let profile =
+                        discord::Profile::from_id(command["mode"].as_str().unwrap_or("precise"));
                     let mode = if command["mode"].as_str() == Some("fast") {
                         TrimMode::Fast
                     } else {
                         TrimMode::Precise
                     };
-                    let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                    let stem = path
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
                     let dir = self.settings.clips_dir.clone();
-                    // Marked moments of the source; the ones inside the cut move along.
                     let marks = self.markers_of(&path);
+                    let annotation = self.annotation(&path);
                     let events = proxy.clone();
-                    self.file_job(proxy, "Dein Clip wird geschnitten…", move || {
+                    let label = format!(
+                        "{} · {}",
+                        stem,
+                        profile.map_or(
+                            if crop.is_some() {
+                                "Hochkant"
+                            } else {
+                                "Schnitt"
+                            },
+                            |p| p.label()
+                        )
+                    );
+                    self.queue_export(label, vec![path.clone()], Box::new(move |control| {
+                        control.check()?;
                         let duration = recorder::probe_duration(&ffmpeg, &path)?;
-                        let Some((start, end)) = mechanics::editor_range(start, end, duration) else {
-                            return Err("Der Ausschnitt muss mindestens zwei Sekunden lang sein und innerhalb des Videos liegen. Kürzere Videos können vollständig gespeichert werden.".into());
+                        let (start, end) = mechanics::editor_range(start, end, duration).ok_or("Der Ausschnitt muss mindestens zwei Sekunden lang sein und innerhalb des Videos liegen.")?;
+                        let suffix = profile.map_or(if crop.is_some() { "Hochkant" } else { "Schnitt" }, |p| p.suffix());
+                        let output = unique_trim_path(&dir, &stem, suffix);
+                        let workspace = export::Snapshot::new(&dir, &[])?;
+                        let staged = workspace.dir.join("clip.mp4");
+                        let (from, message) = if let Some(profile) = profile {
+                            let bytes = discord::export_controlled(&ffmpeg, &path, &staged, start, end, profile, crop, &control.part(0.0, 0.99))?;
+                            (start, format!("{}: {:.2} MB gespeichert und Dateilimit geprüft.", profile.label(), bytes as f64 / 1_000_000.0))
+                        } else {
+                            let from = recorder::trim_controlled(&ffmpeg, &path, &staged, start, end, mode, crop, &control.part(0.0, 0.99))?;
+                            (from, "Neuer Clip gespeichert. Das Original bleibt erhalten.".into())
                         };
-                        let output = unique_trim_path(&dir, &stem);
-                        recorder::trim_clip(&ffmpeg, &path, &output, start, end, mode).map(|from| {
-                            send_markers(&events, &output, &marks, from, end - from);
-                            JobOutcome {
-                                message: "Schnitt als neuer Clip gespeichert. Das Original bleibt erhalten.".into(),
-                                saved: Some(output),
-                                session: None,
-                                replay: false,
-                            }
-                        })
-                    });
+                        control.check()?; workspace.publish(&staged, &output)?;
+                        send_markers(&events, &output, &marks, from, end - from);
+                        let _ = events.send_event(AppEvent::ClipAnnotation(output.clone(), annotation));
+                        Ok(JobOutcome { message, saved: Some(output), session: None, replay: false })
+                    }), proxy);
                 }
                 (Err(error), _) => self.message(Err(error)),
                 (_, None) => self.message(Err("Bitte zuerst FFmpeg auswählen.".into())),
@@ -1209,18 +1709,32 @@ impl App {
     }
 
     fn finish(&mut self, result: JobResult, proxy: EventLoopProxy<AppEvent>) {
-        if result.restore_recorder {
+        let capture_result = result.restore_recorder;
+        if capture_result {
             self.recorder = result.recorder;
+            self.capture.transitioning = false;
+        } else {
+            self.busy = false;
         }
-        self.busy = false;
-        self.recording = self.recorder.as_ref().is_some_and(Recorder::is_recording);
-        self.session = self.recorder.as_ref().and_then(|r| r.info().cloned());
-        self.elapsed = self.recorder.as_ref().map(|r| r.elapsed().as_secs()).unwrap_or(0);
-        let marked = self.pending_marker.take();
-        let renamed = self.pending_rename.take();
+        if let Some(recorder) = &self.recorder {
+            self.recording = recorder.is_recording();
+            self.session = recorder.info().cloned();
+            self.elapsed = recorder.elapsed().as_secs();
+        }
+        let marked = if capture_result {
+            None
+        } else {
+            self.pending_marker.take()
+        };
+        let renamed = if capture_result {
+            None
+        } else {
+            self.pending_rename.take()
+        };
         // Markers belong to one session: once it ends, the buffer behind them
         // is gone, so they go with it.
-        if !self.recording {
+        if !self.recording && !self.capture.transitioning && !self.capture.wants_start() {
+            self.session_settings = None;
             self.markers.clear();
             self.buffered = None;
         }
@@ -1231,6 +1745,18 @@ impl App {
                 }
                 // A renamed clip keeps its marked moments under the new name.
                 if let (Some(old), Some(path)) = (renamed, outcome.saved.as_ref()) {
+                    if self.index.favorites.remove(&old) {
+                        self.index.favorites.insert(library::index_key(path));
+                        self.index.save(&self.config);
+                    }
+                    let annotation = self
+                        .index
+                        .annotations
+                        .remove(&old)
+                        .unwrap_or_else(|| self.annotation(Path::new(&old)));
+                    self.index
+                        .annotations
+                        .insert(library::index_key(path), annotation);
                     let moved = self
                         .index
                         .entries
@@ -1238,6 +1764,7 @@ impl App {
                         .map(|entry| entry.markers.clone())
                         .unwrap_or_default();
                     self.remember_markers(path, moved);
+                    self.index.save(&self.config);
                 }
 
                 let has_warnings = outcome
@@ -1282,16 +1809,15 @@ impl App {
                 }
             }
         }
-        if !self.recording {
+        if !self.recording && !self.capture.transitioning && !self.capture.wants_start() {
             self.auto_started = false;
         }
         self.refresh();
         self.update_tray();
         if self.closing {
-            if self.recording {
-                self.recording_job("stop", proxy);
-            }
+            self.capture.request(false);
         }
+        self.advance_capture(proxy);
     }
 
     fn update_tray(&self) {
@@ -1354,11 +1880,20 @@ fn marker_state(at: f64, before: f64, after: f64, buffered: Option<(f64, f64)>) 
     (ready, available)
 }
 
-fn unique_trim_path(dir: &Path, stem: &str) -> PathBuf {
-    let mut candidate = dir.join(format!("{stem} - Schnitt.mp4"));
+fn parse_crop(value: &Value) -> Result<Option<portrait::Crop>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let crop: portrait::Crop =
+        serde_json::from_value(value.clone()).map_err(|_| "Ungültiger Hochkant-Ausschnitt.")?;
+    crop.validate().map(Some)
+}
+
+fn unique_trim_path(dir: &Path, stem: &str, suffix: &str) -> PathBuf {
+    let mut candidate = dir.join(format!("{stem} - {suffix}.mp4"));
     let mut number = 2;
     while candidate.exists() {
-        candidate = dir.join(format!("{stem} - Schnitt {number}.mp4"));
+        candidate = dir.join(format!("{stem} - {suffix} {number}.mp4"));
         number += 1;
     }
     candidate
@@ -1366,14 +1901,23 @@ fn unique_trim_path(dir: &Path, stem: &str) -> PathBuf {
 
 fn asset(path: &str) -> Option<(&'static [u8], &'static str)> {
     Some(match path {
-        "/" | "/index.html" => (include_bytes!("../ui/index.html"), "text/html; charset=utf-8"),
+        "/" | "/index.html" => (
+            include_bytes!("../ui/index.html"),
+            "text/html; charset=utf-8",
+        ),
         "/app.css" => (include_bytes!("../ui/app.css"), "text/css; charset=utf-8"),
-        "/app.js" => (include_bytes!("../ui/app.js"), "text/javascript; charset=utf-8"),
+        "/app.js" => (
+            include_bytes!("../ui/app.js"),
+            "text/javascript; charset=utf-8",
+        ),
         _ => return None,
     })
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(_instance) = platform::InstanceGuard::acquire()? else {
+        return Ok(());
+    };
     let mut screenshot_path = None;
     let mut screenshot_page = String::from("library");
     let mut start_hidden = false;
@@ -1381,7 +1925,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(arg) = args.next() {
         if arg == "--screenshot" {
             screenshot_path = Some(PathBuf::from(
-                args.next().ok_or("--screenshot benötigt einen PNG-Dateipfad")?,
+                args.next()
+                    .ok_or("--screenshot benötigt einen PNG-Dateipfad")?,
             ));
         } else if arg == "--page" {
             screenshot_page = args
@@ -1427,11 +1972,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .build(&event_loop)?;
     app.window_visible = !start_hidden;
     platform::set_window_icon(window.hwnd() as isize);
+    platform::style_window(window.hwnd() as isize);
     eprintln!("Stillclip: creating WebView");
     let mut context = WebContext::new(Some(app.config.join("webview")));
     let media = app.media.clone();
     let view = WebViewBuilder::new_with_web_context(&mut context)
-        .with_background_color((17, 18, 23, 255))
+        .with_background_color((9, 9, 9, 255))
         .with_custom_protocol("app".into(), |_, request| {
             match asset(request.uri().path()) {
                 Some((bytes, mime)) => Response::builder()
@@ -1547,18 +2093,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Event::UserEvent(AppEvent::Hotkey(id)) => {
                 match id {
-                    HOTKEY_REPLAY if app.recording && !app.busy => {
+                    HOTKEY_REPLAY if app.recording && !app.busy && !app.capture.transitioning => {
                         app.recording_job("replay", proxy.clone());
                     }
-                    HOTKEY_REPLAY_LONG if app.recording && !app.busy => {
+                    HOTKEY_REPLAY_LONG if app.recording && !app.busy && !app.capture.transitioning => {
                         app.recording_job("replay_long", proxy.clone());
                     }
-                    HOTKEY_MARKER if !app.busy => app.mark(),
-                    HOTKEY_REPLAY | HOTKEY_REPLAY_LONG if !app.recording && !app.busy => {
+                    HOTKEY_MARKER if !app.capture.transitioning => app.mark(),
+                    HOTKEY_REPLAY | HOTKEY_REPLAY_LONG if !app.recording && !app.busy && !app.capture.transitioning => {
                         app.notify("Es läuft keine Aufnahme. Starte zuerst die Aufnahme.", true, None);
                     }
-                    HOTKEY_RECORD if !app.busy => {
-                        let next = if app.recording { "stop" } else { "start" };
+                    HOTKEY_RECORD => {
+                        let next = if app.recording || app.capture.transitioning { "stop" } else { "start" };
                         app.recording_job(next, proxy.clone());
                     }
                     _ => {}
@@ -1591,16 +2137,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::UserEvent(AppEvent::Tray(action)) => {
                 match action {
                     TrayAction::Show => show_window(&window, &mut app),
-                    TrayAction::ToggleRecording if !app.busy => {
-                        let next = if app.recording { "stop" } else { "start" };
+                    TrayAction::ToggleRecording => {
+                        let next = if app.recording || app.capture.transitioning { "stop" } else { "start" };
                         app.recording_job(next, proxy.clone());
                     }
-                    TrayAction::SaveReplay if app.recording && !app.busy => {
+                    TrayAction::SaveReplay if app.recording && !app.busy && !app.capture.transitioning => {
                         app.recording_job("replay", proxy.clone());
                     }
                     TrayAction::Quit => {
                         app.closing = true;
-                        if app.busy {
+                        app.cancel_background();
+                        if app.busy || app.capture.transitioning || !app.exports.is_empty() || app.audio_test.active.is_some() || app.dragging.is_some() {
+                            app.capture.request(false);
+                            app.advance_capture(proxy.clone());
                             app.status = "Vorgang wird abgeschlossen, danach schließt Stillclip…".into();
                         } else if app.recording {
                             app.recording_job("stop", proxy.clone());
@@ -1614,10 +2163,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Event::UserEvent(AppEvent::Capabilities(capabilities)) => {
                 app.capabilities = capabilities;
-                if app.pending_start {
-                    app.pending_start = false;
-                    app.recording_job("start", proxy.clone());
-                }
+                app.advance_capture(proxy.clone());
                 app.sync(&view);
             }
             Event::UserEvent(AppEvent::ClipMarkers(path, offsets)) => {
@@ -1643,8 +2189,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let name = game.name.clone();
                 app.active_game = Some(game);
                 app.active_game_display = (!monitor.is_empty()).then_some(monitor);
-                if app.settings.auto_record_games && app.ffmpeg.is_some() {
-                    if !app.recording && !app.busy {
+                if app.settings.auto_record_games && app.ffmpeg.is_some() && !app.closing {
+                    if !app.recording || app.auto_started {
                         app.auto_started = true;
                         app.restarts.clear();
                         app.notify(&format!("{name} erkannt – die Aufnahme startet."), false, None);
@@ -1662,7 +2208,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     app.active_game = None;
                     app.active_game_display = None;
                 }
-                if app.auto_started && app.recording && !app.busy {
+                if app.auto_started {
                     app.auto_started = false;
                     app.notify(&format!("{name} beendet – die Aufnahme wird gestoppt."), false, None);
                     app.recording_job("stop", proxy.clone());
@@ -1670,10 +2216,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 app.update_tray();
                 app.sync(&view);
             }
+            Event::UserEvent(AppEvent::AudioMeters(id, meters)) => { if id == app.audio_test.id { app.audio_test.meters = meters; } }
+            Event::UserEvent(AppEvent::AudioFinished(id, result)) => {
+                if id == app.audio_test.id {
+                    app.audio_test.active = None; app.audio_test.meters.clear(); app.audio_test.levels.clear();
+                    match result {
+                        Ok(preview) => { app.audio_test.preview = Some(preview); app.audio_test.error = None; }
+                        Err(e) => { app.audio_test.error = (e != jobs::CANCELLED).then_some(e); }
+                    }
+                    app.update_media_map(); app.sync(&view);
+                }
+            }
+            Event::UserEvent(AppEvent::DragFinished(result)) => {
+                app.dragging = None;
+                if let Err(e) = result { app.message(Err(e)); }
+                app.sync(&view);
+            }
+            Event::UserEvent(AppEvent::ClipAnnotation(path, annotation)) => {
+                app.index.annotations.insert(library::index_key(&path), annotation); app.index.save(&app.config);
+            }
+            Event::UserEvent(AppEvent::ExportFinished(id, result)) => {
+                app.finish_export(id, result, proxy.clone()); app.sync(&view);
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() { *control_flow = ControlFlow::Exit; }
+            }
             Event::UserEvent(AppEvent::Finished(result)) => {
                 app.finish(result, proxy.clone());
                 app.sync(&view);
-                if app.closing && !app.recording && !app.busy {
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() {
                     *control_flow = ControlFlow::Exit;
                 }
             }
@@ -1695,7 +2264,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 } else {
                     app.closing = true;
-                    if app.busy {
+                    app.cancel_background();
+                    if app.busy || app.capture.transitioning || !app.exports.is_empty() || app.audio_test.active.is_some() || app.dragging.is_some() {
+                        app.capture.request(false);
+                        app.advance_capture(proxy.clone());
                         app.status = "Vorgang wird abgeschlossen, danach schließt Stillclip…".into();
                         app.sync(&view);
                     } else if app.recording {
@@ -1730,6 +2302,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         std::process::exit(1);
                     }
                 }
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() { *control_flow = ControlFlow::Exit; }
+                if app.audio_test.active.is_some() { app.audio_test.poll(); app.sync(&view); }
+                app.start_exports(proxy.clone());
+                if !app.exports.is_empty() { app.sync(&view); }
                 if let Some(recorder) = app.recorder.as_mut() {
                     let issue = recorder.poll();
                     let elapsed = recorder.elapsed().as_secs();
@@ -1763,6 +2339,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Event::LoopDestroyed => {
+                app.cancel_background();
                 app.index.save(&app.config);
                 app.recorder.take();
                 app.watcher.take();
@@ -1806,17 +2383,26 @@ mod tests {
     #[test]
     fn marked_moments_become_positions_inside_the_saved_clip() {
         let round = |values: Vec<f64>| -> Vec<f64> {
-            values.iter().map(|v| (v * 1000.0).round() / 1000.0).collect()
+            values
+                .iter()
+                .map(|v| (v * 1000.0).round() / 1000.0)
+                .collect()
         };
         // A thirty second replay saved at session time 100..130.
         let marks = [40.0, 101.5, 112.0, 129.9, 200.0];
-        assert_eq!(round(marker_offsets(&marks, 100.0, 30.0)), [1.5, 12.0, 29.9]);
+        assert_eq!(
+            round(marker_offsets(&marks, 100.0, 30.0)),
+            [1.5, 12.0, 29.9]
+        );
         // Nothing inside the window: no marks for this clip.
         assert!(marker_offsets(&marks, 150.0, 30.0).is_empty());
         // The keyframe cut starts the clip a moment early; the mark moves with it.
         assert_eq!(round(marker_offsets(&[20.0], 19.6, 30.0)), [0.4]);
         // A mark right on either edge still counts and stays in range.
-        assert_eq!(round(marker_offsets(&[100.0, 130.0], 100.0, 30.0)), [0.0, 30.0]);
+        assert_eq!(
+            round(marker_offsets(&[100.0, 130.0], 100.0, 30.0)),
+            [0.0, 30.0]
+        );
         // The clip around a marked moment has it exactly after the lead.
         assert_eq!(round(marker_offsets(&[60.0], 40.0, 30.0)), [20.0]);
     }
@@ -1842,6 +2428,9 @@ mod tests {
         assert!(ready);
         assert_eq!(available, 0.0);
         // A tail of zero seconds is ready as soon as the mark itself is written.
-        assert_eq!(marker_state(50.0, 15.0, 0.0, Some((0.0, 50.0))), (true, 15.0));
+        assert_eq!(
+            marker_state(50.0, 15.0, 0.0, Some((0.0, 50.0))),
+            (true, 15.0)
+        );
     }
 }

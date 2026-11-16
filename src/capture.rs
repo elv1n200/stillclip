@@ -31,7 +31,7 @@ pub fn command(executable: &Path) -> Command {
 fn child_job() -> windows_sys::Win32::Foundation::HANDLE {
     use std::sync::OnceLock;
     use windows_sys::Win32::System::JobObjects::{
-        CreateJobObjectW, SetInformationJobObject, JobObjectExtendedLimitInformation,
+        CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     struct Job(isize);
@@ -129,7 +129,10 @@ pub fn displays() -> Vec<Display> {
                         let rect = desc.DesktopCoordinates;
                         let width = (rect.right - rect.left).max(0) as u32;
                         let height = (rect.bottom - rect.top).max(0) as u32;
-                        if width > 0 && height > 0 && !found.iter().any(|d: &Display| d.name == name) {
+                        if width > 0
+                            && height > 0
+                            && !found.iter().any(|d: &Display| d.name == name)
+                        {
                             found.push(Display {
                                 name,
                                 x: rect.left,
@@ -242,11 +245,15 @@ impl Encoder {
 pub struct Capabilities {
     pub encoders: Vec<Encoder>,
     pub ddagrab: bool,
+    #[serde(default)]
+    pub gfxcapture: bool,
     pub probed: bool,
 }
 
 #[derive(Serialize, Deserialize)]
 struct CapabilityCache {
+    #[serde(default)]
+    version: u32,
     ffmpeg: PathBuf,
     size: u64,
     modified: u64,
@@ -271,7 +278,11 @@ pub fn cached_capabilities(ffmpeg: &Path, config_dir: &Path) -> Option<Capabilit
     let cache: CapabilityCache =
         crate::settings::read_json(&config_dir.join("ffmpeg-capabilities.json"))?;
     let (size, modified) = ffmpeg_identity(ffmpeg);
-    (cache.ffmpeg == ffmpeg && cache.size == size && cache.modified == modified && cache.capabilities.probed)
+    (cache.version == 2
+        && cache.ffmpeg == ffmpeg
+        && cache.size == size
+        && cache.modified == modified
+        && cache.capabilities.probed)
         .then_some(cache.capabilities)
 }
 
@@ -302,6 +313,7 @@ pub fn probe_capabilities(ffmpeg: &Path, config_dir: &Path) -> Capabilities {
     let mut capabilities = Capabilities {
         encoders: Vec::new(),
         ddagrab: false,
+        gfxcapture: false,
         probed: true,
     };
     let mut filters = command(ffmpeg);
@@ -311,6 +323,10 @@ pub fn probe_capabilities(ffmpeg: &Path, config_dir: &Path) -> Capabilities {
             .lines()
             .any(|line| line.split_whitespace().nth(1) == Some("ddagrab"));
     }
+    let mut window_probe = command(ffmpeg);
+    window_probe.args(["-hide_banner", "-h", "filter=gfxcapture"]);
+    capabilities.gfxcapture = run_with_timeout(window_probe, Duration::from_secs(5))
+        .is_some_and(|out| String::from_utf8_lossy(&out.stdout).contains("hwnd"));
     for encoder in Encoder::ALL {
         let mut probe = command(ffmpeg);
         probe
@@ -335,6 +351,7 @@ pub fn probe_capabilities(ffmpeg: &Path, config_dir: &Path) -> Capabilities {
     }
     let (size, modified) = ffmpeg_identity(ffmpeg);
     let cache = CapabilityCache {
+        version: 2,
         ffmpeg: ffmpeg.to_path_buf(),
         size,
         modified,
@@ -364,9 +381,14 @@ pub fn select_encoder(choice: EncoderChoice, available: &[Encoder]) -> Encoder {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VideoSource {
     /// Desktop Duplication through FFmpeg's `ddagrab` filter.
-    Ddagrab { output_idx: u32 },
+    Ddagrab {
+        output_idx: u32,
+    },
     /// GDI screen grabbing by desktop coordinates.
     Gdigrab,
+    Window {
+        hwnd: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -380,6 +402,7 @@ impl Strategy {
         let source = match self.source {
             VideoSource::Ddagrab { .. } => "Desktop Duplication",
             VideoSource::Gdigrab => "GDI",
+            VideoSource::Window { .. } => "Windows-Fensteraufnahme",
         };
         format!("{source} · {}", self.encoder.label())
     }
@@ -443,14 +466,28 @@ pub fn output_size(display: &Display, quality: Quality) -> (u32, u32) {
     }
 }
 
-pub fn encoder_args(command: &mut Command, encoder: Encoder, rates: &CaptureEncoding, hardware_frames: bool) {
+pub fn encoder_args(
+    command: &mut Command,
+    encoder: Encoder,
+    rates: &CaptureEncoding,
+    hardware_frames: bool,
+) {
     command.args(["-c:v", encoder.codec()]);
     match encoder {
         Encoder::Cpu => {
             command.args(["-preset", "veryfast", "-pix_fmt", "yuv420p"]);
         }
         Encoder::Nvenc => {
-            command.args(["-preset", "p4", "-tune", "hq", "-rc", "vbr", "-spatial-aq", "1"]);
+            command.args([
+                "-preset",
+                "p4",
+                "-tune",
+                "hq",
+                "-rc",
+                "vbr",
+                "-spatial-aq",
+                "1",
+            ]);
             if !hardware_frames {
                 command.args(["-pix_fmt", "yuv420p"]);
             }
@@ -555,10 +592,27 @@ pub fn build_command(ffmpeg: &Path, request: &CaptureRequest) -> Command {
     );
     let native = (width, height) == (display.width, display.height);
     let mut command = command(ffmpeg);
-    command.args(["-hide_banner", "-loglevel", "warning", "-nostats", "-y"]);
+    command
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-nostats",
+            "-y",
+            "-stats_period",
+            "1",
+            "-progress",
+        ])
+        .arg(request.segment_dir.join("progress.txt"));
     let cursor = if request.show_cursor { "1" } else { "0" };
     let mut hardware_frames = false;
     match request.strategy.source {
+        VideoSource::Window { hwnd } => {
+            let graph = format!("gfxcapture=hwnd={hwnd}:max_framerate={}:capture_cursor={cursor},hwdownload,format=bgra,scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fps={}", request.fps, request.fps);
+            command
+                .args(["-init_hw_device", "d3d11va", "-f", "lavfi", "-i"])
+                .arg(graph);
+        }
         VideoSource::Ddagrab { output_idx } => {
             let mut graph = format!(
                 "ddagrab=output_idx={output_idx}:framerate={}:draw_mouse={cursor}",
@@ -590,7 +644,13 @@ pub fn build_command(ffmpeg: &Path, request: &CaptureRequest) -> Command {
     }
     for input in request.audio {
         command
-            .args(["-thread_queue_size", "4096", "-f", input.sample_format, "-ar"])
+            .args([
+                "-thread_queue_size",
+                "4096",
+                "-f",
+                input.sample_format,
+                "-ar",
+            ])
             .arg(input.rate.to_string())
             .arg("-ac")
             .arg(input.channels.to_string())
@@ -602,7 +662,12 @@ pub fn build_command(ffmpeg: &Path, request: &CaptureRequest) -> Command {
     }
     command.args(["-map", "0:v:0"]);
     audio_mapping(&mut command, request);
-    encoder_args(&mut command, request.strategy.encoder, &rates, hardware_frames);
+    encoder_args(
+        &mut command,
+        request.strategy.encoder,
+        &rates,
+        hardware_frames,
+    );
     command.args(["-fps_mode", "cfr"]);
     if !request.audio.is_empty() {
         command.args(["-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"]);
@@ -661,8 +726,14 @@ mod tests {
     #[test]
     fn selects_requested_or_best_available_encoder() {
         let available = [Encoder::Amf, Encoder::Cpu];
-        assert_eq!(select_encoder(EncoderChoice::Auto, &available), Encoder::Amf);
-        assert_eq!(select_encoder(EncoderChoice::Nvenc, &available), Encoder::Amf);
+        assert_eq!(
+            select_encoder(EncoderChoice::Auto, &available),
+            Encoder::Amf
+        );
+        assert_eq!(
+            select_encoder(EncoderChoice::Nvenc, &available),
+            Encoder::Amf
+        );
         assert_eq!(select_encoder(EncoderChoice::Cpu, &available), Encoder::Cpu);
         assert_eq!(select_encoder(EncoderChoice::Auto, &[]), Encoder::Cpu);
         assert_eq!(select_encoder(EncoderChoice::Nvenc, &[]), Encoder::Nvenc);
@@ -719,6 +790,35 @@ mod tests {
     }
 
     #[test]
+    fn window_capture_uses_only_the_selected_handle_and_keeps_progress() {
+        for encoder in [Encoder::Nvenc, Encoder::Cpu] {
+            let display = display();
+            let strategy = Strategy {
+                source: VideoSource::Window { hwnd: 123456 },
+                encoder,
+            };
+            let cmd = build_command(
+                Path::new("ffmpeg"),
+                &CaptureRequest {
+                    display: &display,
+                    strategy: &strategy,
+                    fps: 60,
+                    quality: Quality::P1080,
+                    show_cursor: false,
+                    audio: &[],
+                    separate_microphone: false,
+                    segment_dir: Path::new("buffer"),
+                    list_path: Path::new("buffer/segments.csv"),
+                },
+            );
+            let args = describe(&cmd);
+            assert!(args.contains("gfxcapture=hwnd=123456"));
+            assert!(!args.contains("-i desktop") && !args.contains("ddagrab="));
+            assert!(args.contains("progress.txt") && args.contains("capture_cursor=0"));
+        }
+    }
+
+    #[test]
     fn loudness_is_applied_per_source() {
         // One source: a plain audio filter is enough.
         let text = audio_line(&[pipe("a", 0.5)], false);
@@ -726,17 +826,25 @@ mod tests {
         assert!(!text.contains("filter_complex"), "{text}");
         // Unity gain stays out of the command line entirely.
         let text = audio_line(&[pipe("a", 1.0), pipe("b", 1.0)], false);
-        assert!(text.contains("-filter_complex [1:a][2:a]amix=inputs=2"), "{text}");
+        assert!(
+            text.contains("-filter_complex [1:a][2:a]amix=inputs=2"),
+            "{text}"
+        );
         assert!(!text.contains("volume="), "{text}");
         // System quieter, microphone louder, both mixed into one track.
         let text = audio_line(&[pipe("a", 0.8), pipe("b", 1.5)], false);
         assert!(
-            text.contains("-filter_complex [1:a]volume=0.800[g1];[2:a]volume=1.500[g2];[g1][g2]amix=inputs=2"),
+            text.contains(
+                "-filter_complex [1:a]volume=0.800[g1];[2:a]volume=1.500[g2];[g1][g2]amix=inputs=2"
+            ),
             "{text}"
         );
         // The microphone keeps its loudness on its own track as well.
         let text = audio_line(&[pipe("a", 1.0), pipe("b", 1.5)], true);
-        assert!(text.contains("[2:a]volume=1.500,asplit=2[m2][mic]"), "{text}");
+        assert!(
+            text.contains("[2:a]volume=1.500,asplit=2[m2][mic]"),
+            "{text}"
+        );
         assert!(text.contains("[1:a][m2]amix=inputs=2"), "{text}");
         assert!(text.contains("-map [a] -map [mic]"), "{text}");
     }
@@ -793,7 +901,9 @@ mod tests {
         let text = describe(&command);
         assert!(text.contains("-map [a] -map [mic]"), "{text}");
         assert!(text.contains("[2:a]asplit=2[m2][mic]"), "{text}");
-        assert!(text.contains("ddagrab=output_idx=0:framerate=60:draw_mouse=0,hwdownload,format=bgra,scale=1280:720"));
+        assert!(text.contains(
+            "ddagrab=output_idx=0:framerate=60:draw_mouse=0,hwdownload,format=bgra,scale=1280:720"
+        ));
         assert!(text.contains("amix=inputs=2"));
         assert!(text.contains("-c:v h264_nvenc"));
         assert!(text.contains("-b:v 15000000 -maxrate 30000000 -bufsize 30000000 -bf 0 -g 24"));

@@ -9,15 +9,59 @@ Die Anwendung ist in Rust geschrieben (`tao`, `wry`), die Oberfläche läuft in
 der Microsoft Edge WebView2-Laufzeit, Aufnahme und Schnitt übernimmt eine lokal
 vorhandene `ffmpeg.exe`.
 
-![Bibliothek](shots/v2-library.png)
+![Bibliothek](shots/terminal-library.png)
+
+## Aktueller Stand
+
+Die Oberfläche verwendet einen schwarzen Hintergrund, eckige Rahmen,
+Monospace-Schrift und rosa Akzente. Die Einstellungen haben eine direkte
+Bereichsnavigation; Bibliothek und Editor verwenden dasselbe Design.
+
+Aufnahme und Clip-Export arbeiten unabhängig: Markieren, Beenden,
+Pufferbereinigung und Freiplatzprüfung bleiben während eines Exports aktiv.
+Der Export hält eigene Verweise auf seine Segmente und veröffentlicht erst den
+fertigen Clip. Start-/Stopp-Wünsche bleiben auch während eines Aufnahmewechsels
+erhalten. Eine zweite App-Instanz öffnet das vorhandene Fenster, statt dessen
+Puffer wiederherzustellen oder zu löschen.
 
 ## Was die App kann
+
+- **Exportliste.** Bis zu zwölf Schnitte oder Highlight-Exporte einreihen,
+  währenddessen weitere Clips bearbeiten. Fortschritt, geschätzte Restzeit und
+  Abbrechen sind in Bibliothek und Editor erreichbar. Ein Auftrag läuft zur
+  Zeit; Quellclips bleiben bis zum Abschluss gegen Umbenennen, Löschen und
+  automatisches Aufräumen geschützt. Beim tatsächlichen Beenden werden offene
+  Aufträge abgebrochen und unfertige Ausgaben entfernt; im Infobereich laufen
+  Exporte weiter. Die Warteschlange wird nicht über Neustarts gespeichert.
+- **Hochkant für Shorts und Reels.** 9:16 mit 720×1280 oder 1080×1920 wählen,
+  den Ausschnitt im Vorschaubild verschieben oder mit den Reglern positionieren.
+  Die Position gilt für die gesamte Auswahl. Auch Highlights speichern den
+  Zuschnitt je Ausschnitt; der Formatwähler bestimmt das gemeinsame Ausgabeformat.
+  Die Discord-Profile können die Auflösung zugunsten des Dateilimits senken.
+- **Audio-Test.** Vor der Aufnahme zehn Sekunden System-/Spielton und Mikrofon
+  mit den aktuellen Einstellungen prüfen, einschließlich des passenden
+  Spielprofils. Getrennte Pegel zeigen Stille und Übersteuerung; den fertigen Mix
+  direkt anhören. Der Test startet keine Bildschirmaufnahme und wird beim
+  nächsten Test oder regulären Beenden entfernt.
+- **Dateien ziehen.** Am Feld „Ziehen“ einen Clip gedrückt halten und nach
+  Discord oder in einen Ordner ziehen. Windows übergibt die echte Datei; der
+  Empfänger bestimmt den weiteren Ablauf. Discord versendet nichts automatisch.
+  Escape bricht das Ziehen ab. Als Alternative „Im Explorer anzeigen“ nutzen.
+- **Spiel und Tags.** Im Editor ein Spiel und bis zu zwölf Tags vergeben.
+  Bibliothek nach Spiel, Tag, Datumsbereich und Länge filtern oder in Namen,
+  Spielen und Tags suchen. Die Angaben bleiben nach Neustart und Umbenennen
+  erhalten und werden bei einzelnen Schnittexporten übernommen.
 
 - **Spielerkennung.** Rund 90 bekannte Spiele sind eingebaut; jedes andere
   Programm lässt sich mit einem Klick aus der Liste der laufenden Fenster oder
   über die EXE hinzufügen. Startet ein erkanntes Spiel, beginnt die Aufnahme von
   selbst und endet mit dem Spiel wieder. Clips tragen den Spielnamen, zum
   Beispiel `Counter-Strike 2 2026-11-14 21-04-10.mp4`.
+- **Spieleprofile.** Pro Spiel eigene Auflösung, FPS, Rückblicklänge, Ton,
+  Mikrofon und Aufnahmequelle einstellen. Das Profil wird beim nächsten Start
+  des erkannten Spiels beziehungsweise für das gewählte Zielprogramm angewandt.
+  Die allgemeinen Einstellungen werden nicht überschrieben. Profile sind
+  während einer laufenden Aufnahme gesperrt.
 - **Rückblick ohne Lücke.** Die Aufnahme läuft als Ring aus kurzen
   MPEG-TS-Segmenten. Beim Sichern werden nur die passenden Segmente
   zusammengesetzt und am nächsten Keyframe geschnitten – nichts wird neu
@@ -32,6 +76,12 @@ vorhandene `ffmpeg.exe`.
 - **Der richtige Bildschirm.** Läuft das erkannte Spiel auf einem anderen
   Monitor als dem eingestellten, nimmt Stillclip diesen auf. Das Banner
   erscheint auf demselben Bildschirm.
+- **Nur das Spielfenster.** Unter Aufnahme die Fensterquelle und gegebenenfalls
+  ein laufendes Zielprogramm wählen. Ein erkanntes Spiel hat Vorrang.
+  Windows Graphics Capture nimmt genau dieses Fenster auf; auch ein
+  Encoder-Fallback bleibt an das Fenster gebunden. Beim Minimieren oder
+  Schließen endet die Aufnahme. Benötigt eine FFmpeg-Version mit dem Filter
+  `gfxcapture` und dessen `hwnd`-Option; Stillclip prüft die Unterstützung.
 - **Zwei Längen.** Neben der normalen Cliplänge lässt sich eine zweite,
   längere einstellen – mit eigener Taste, zum Beispiel 30 Sekunden für den
   Treffer und fünf Minuten für die ganze Runde.
@@ -50,6 +100,12 @@ vorhandene `ffmpeg.exe`.
   Lautstärke von 0 bis 200 Prozent. Wechselt das Wiedergabegerät mitten in der
   Aufnahme, folgt Stillclip automatisch. Das Mikrofon kann zusätzlich als
   eigene zweite Tonspur mitlaufen.
+- **Nur Spielton.** Die Tonquelle kann auf das Zielprogramm samt Unterprozessen
+  beschränkt werden. Andere Programme wie Discord oder Spotify werden dabei
+  nicht über den Systemmix aufgenommen. Das Mikrofon lässt sich weiterhin
+  zumischen. Benötigt Windows 11 oder Windows Build 20348+. Falls die
+  Prozessaufnahme fehlschlägt, meldet Stillclip den Fehler und startet nicht
+  ersatzweise mit dem gesamten Systemton.
 - **Speicherplatz.** Stillclip beendet die Aufnahme, bevor das Laufwerk
   volläuft, und kann auf Wunsch die ältesten Clips löschen, sobald der Ordner
   eine eingestellte Größe überschreitet.
@@ -69,10 +125,31 @@ vorhandene `ffmpeg.exe`.
   Windows (Run-Eintrag des Benutzerkontos).
 - **Bibliothek.** Vorschaubilder, Länge, Auflösung, Tonanzeige, Suche und
   Sortierung; Kontextmenü mit Öffnen, Standardplayer, Explorer und Papierkorb.
+- **Favoriten.** Der Stern am Clip schützt ihn vor automatischem Aufräumen.
+  Ein Filter zeigt nur Favoriten. Der Status bleibt beim Neustart und beim
+  Umbenennen erhalten; manuelles Löschen ist weiterhin möglich. Geschützte
+  Clips und der neueste Clip können dazu führen, dass das Ordnerlimit nicht
+  erreicht wird. Die Prüfung des freien Laufwerksplatzes bleibt aktiv.
 - **Editor.** Zeitleiste mit ziehbaren Start-/Endmarken, markierten Momenten,
   Abspielposition, Bildschritte, Schleife der Auswahl, Tastatur (Leertaste,
   I/O, Pfeiltasten, L, M, Entf). Export präzise (neu kodiert) oder schnell
   (ohne Neukodierung).
+- **Highlights.** Im Editor Ausschnitte sammeln, weitere Clips öffnen und die
+  Liste mit den Pfeilen sortieren. Bis zu 20 Ausschnitte und 30 Minuten werden
+  zu einem neuen Video mit 1080p/60 FPS und einer Stereospur verbunden. Andere
+  Seitenverhältnisse erhalten Balken, fehlender Ton wird durch Stille ergänzt.
+  Markierungen wandern mit. Die Liste ist ein Entwurf bis zum Schließen der
+  App. Auch Discord-Export ist möglich; dabei kann die Auflösung sinken.
+- **Aufnahmediagnose.** Unter der Aufnahmekarte stehen gemessene Encoder-FPS,
+  verworfene/duplizierte Bilder, Zeitrückstand, Puffer und freier Speicher.
+  Fehlende Messwerte erscheinen als unbekannt. Die FPS sind keine Spiel-FPS;
+  die Anzeige weist auf ausbleibende oder deutlich verspätete Bilder hin.
+- **Discord-Export.** Im Editor unter **Export** zwischen **Discord ohne Nitro
+  · 20 MB** und **Discord Nitro · 1 GB** wählen. Stillclip passt Bitrate,
+  Auflösung und Bildrate an die Länge des ausgewählten Bereichs an (bis
+  1080p/60 FPS, ohne Hochskalieren). Eine neue MP4 mit H.264 und AAC landet
+  in der Bibliothek; Original und Markierungen bleiben erhalten. Hochgeladen
+  wird nichts automatisch.
 - **Ganze Sitzung behalten.** Optional wird beim Beenden zusätzlich die
   komplette Aufnahme als Video gespeichert. Nach einem Absturz werden
   übrig gebliebene Segmente einer solchen Sitzung beim nächsten Start
@@ -80,7 +157,9 @@ vorhandene `ffmpeg.exe`.
 
 ## Starten und verwenden
 
-1. `target/release/stillclip.exe` starten. Die Microsoft Edge WebView2-Laufzeit
+1. Das ZIP aus dem Artefakt **stillclip-windows-x64** eines erfolgreichen
+   GitHub-Actions-Laufs entpacken und `stillclip.exe` starten. Bei einem eigenen
+   Build liegt sie unter `target/release/stillclip.exe`. Die Microsoft Edge WebView2-Laufzeit
    muss installiert sein (bei Windows 11 immer der Fall).
 2. Stillclip sucht eine vorhandene `ffmpeg.exe` (unter anderem `tools/ffmpeg.exe`
    neben der Anwendung, `PATH`, Streamlabs, WinGet). Alternativ unter
@@ -104,9 +183,35 @@ Vorschaubilder und der Medienindex unter `settings`. Während einer Aufnahme
 liegt der Segmentpuffer im versteckten Unterordner `clips/.stillclip-puffer`
 und wird danach entfernt.
 
+### Für Discord speichern
+
+Clip öffnen, den gewünschten Bereich wählen und unter **Export** das passende
+Discord-Profil auswählen. **Für Discord speichern** erstellt eine eigene Datei
+mit dem Zusatz `- Discord` beziehungsweise `- Discord Nitro`. Diese lässt sich
+anschließend aus dem Clip-Ordner in Discord ziehen.
+
+Die Grenzen von 20 MB ohne Nitro und 1 GB mit Nitro entsprechen der
+[Discord-Hilfe zu Dateianhängen](https://support.discord.com/hc/de/articles/25444343291031-Dateianh%C3%A4nge-FAQ)
+(geprüft am 16. November 2026). Nitro Basic ist ein anderer Tarif und verwendet
+nicht das 1-GB-Profil.
+
+Für die Dateigröße kodiert Stillclip in zwei Durchläufen mit x264 auf der CPU,
+reserviert Platz für Ton und MP4-Daten und prüft die fertige Datei. Nur ein
+vollständiger Export unter dem gewählten Limit wird gespeichert. Bei Bedarf
+folgt ein weiterer Versuch mit niedrigerer Bitrate. Ist der Ausschnitt zu lang,
+fordert Stillclip einen kürzeren Bereich oder ein größeres Profil an; das Video
+wird nie am Dateilimit abgeschnitten. Kurze Clips müssen das Limit nicht
+ausschöpfen. Die Aufnahme kann währenddessen weiterlaufen, die zusätzliche
+CPU-Last kann sich jedoch auf die Spielleistung auswirken.
+
+Die erste Tonspur enthält bei Stillclip-Aufnahmen bereits Spiel und Mikrofon.
+Der Discord-Export übernimmt diese als eine Stereospur; eine zusätzliche
+Mikrofonspur wird nicht doppelt eingemischt. Bei importierten Videos wird
+ebenfalls die erste Tonspur verwendet.
+
 ## Einstellungen
 
-![Einstellungen](shots/v2-settings.png)
+![Einstellungen](shots/terminal-settings.png)
 
 | Bereich | Optionen |
 | --- | --- |
@@ -119,8 +224,10 @@ und wird danach entfernt.
 | Verhalten | Banner im Spiel, Ton beim Sichern, in den Infobereich schließen, Aufnahme beim Start, minimiert starten, Autostart |
 | Speicherort | Clip-Ordner wählen und öffnen |
 
-Aufnahme- und Ton-Einstellungen gelten ab der nächsten Aufnahme; Spiele,
-Tastenkürzel und Verhalten wirken sofort.
+Bild, Ton, Rückblicklängen, Markierungsfenster, präziser Export und
+Mindestfreiplatz sind während einer Aufnahme gesperrt, damit die angezeigten
+Werte immer zur laufenden Sitzung passen. Zum Ändern zuerst die Aufnahme
+beenden. Spiele, Tastenkürzel, Ordnerlimit und Verhalten bleiben anpassbar.
 
 ## Grenzen dieser Version
 
@@ -132,10 +239,11 @@ Tastenkürzel und Verhalten wirken sofort.
   wird entsprechend später erkannt.
 - Das Mischen von Systemton und Mikrofon erfolgt in eine gemeinsame Tonspur;
   die optionale zweite Spur enthält nur das Mikrofon.
-- Kein Fenster- oder Spielmodus: Aufgenommen wird immer ein ganzer Bildschirm.
-  Startet ein erkanntes Spiel auf einem anderen Monitor, wechselt Stillclip
-  dorthin, aber erst beim Start der Aufnahme – ein Fensterwechsel während einer
-  laufenden Aufnahme ändert den Bildschirm nicht.
+- Die Bildschirmquelle nimmt den ganzen gewählten Monitor auf. Der automatische
+  Monitorwechsel erfolgt nur beim Start. Die Fensterquelle benötigt passende
+  Windows-/FFmpeg-Unterstützung; minimierte Fenster und exklusives Vollbild
+  können keine verwendbaren Bilder liefern. Es gibt keine Eingriffe in das
+  Spiel oder einen Grafik-Hook.
 - Markierungen im fertigen Clip merkt sich Stillclip im Medienindex neben der
   Clipdatei, nicht in der Datei selbst. Beim Umbenennen und beim Zuschneiden
   wandern sie mit; wer den Clip außerhalb von Stillclip verschiebt oder
@@ -162,24 +270,24 @@ Abweichungen stehen in [MECHANICS.md](MECHANICS.md).
 ## Entwickeln
 
 Windows, Rust/Cargo und die Microsoft C++ Build Tools werden zum Bauen benötigt.
-Im Ordner `app` ausführen:
+Im Repository-Hauptordner ausführen:
 
 ```powershell
-cargo build --offline --release
-cargo test --offline
+cargo build --locked --release
+cargo test --locked
 ```
 
 Weitere Prüfungen:
 
 ```powershell
 # Synthetische FFmpeg-Tests: Schnitt, Vorschaubild, Segment-Export (kein Bildschirm)
-cargo test --offline -- --ignored
+cargo test --locked synthetic_ -- --ignored
 
 # Echte Aufnahme des Hauptbildschirms mit Systemton für etwa zehn Sekunden
-cargo test --offline real_capture -- --ignored --nocapture
+cargo test --locked real_capture -- --ignored --nocapture
 
 # Banner einmal anzeigen und als Bild festhalten
-$env:STILLCLIP_OVERLAY_SHOT="shots/overlay.png"; cargo test --offline overlay_smoke -- --ignored
+$env:STILLCLIP_OVERLAY_SHOT="shots/overlay.png"; cargo test --locked overlay_smoke -- --ignored
 
 # Gerenderte Oberfläche als PNG, ohne Aufnahme
 target/release/stillclip.exe --screenshot shots/library.png
@@ -199,6 +307,11 @@ Symbol im Infobereich.
 | Datei | Inhalt |
 | --- | --- |
 | `src/main.rs` | Fenster, WebView, Ereignisschleife, IPC-Aktionen, Hintergrundjobs |
+| `src/lifecycle.rs` | Getestete Start-/Stopp-Anforderungen während Aufnahmewechseln |
+| `src/export.rs` | Unabhängige Exporte mit gesicherten Segmenten und geschützter Veröffentlichung |
+| `src/discord.rs` | Discord-Dateilimits, Bitratenplanung, zweistufiger MP4-Export und Größenprüfung |
+| `src/highlights.rs` | Mehrere Ausschnitte vereinheitlichen, verbinden und als Highlight exportieren |
+| `src/diagnostics.rs` | Begrenztes Lesen und Auswerten vollständiger FFmpeg-Fortschrittsmeldungen |
 | `src/games.rs` | Spieleliste, Fenster-/Prozess-Erkennung, Watcher-Thread |
 | `src/capture.rs` | Bildschirme (DXGI), Encoder-Erkennung, FFmpeg-Kommandozeile |
 | `src/audio.rs` | WASAPI-Aufnahme (Loopback/Mikrofon) in Named Pipes, Gerätewechsel |
@@ -209,3 +322,30 @@ Symbol im Infobereich.
 | `src/platform.rs` | Dialoge, Explorer, Papierkorb, Autostart, Hotkeys, Infobereich |
 | `src/encoding.rs`, `src/mechanics.rs` | Aus dem Original übernommene Formeln und Grenzen |
 | `ui/` | Oberfläche (`index.html`, `app.css`, `app.js`), wird in die EXE eingebettet |
+
+### Automatische Prüfungen und Downloads
+
+`.github/workflows/verify.yml` baut auf Windows, führt Unit-/Regressionstests
+und ausschließlich synthetische FFmpeg-Tests aus und stellt ein portables ZIP
+als Actions-Artefakt bereit. FFmpeg und WebView2 werden nicht mitgeliefert.
+Echte Bildschirm-/Mikrofonprüfungen bleiben ausdrücklich manuelle Tests.
+
+Die Oberfläche wird separat mit simulierten Zustandsdaten geprüft:
+
+```sh
+npm ci
+npx playwright install chromium
+npm test
+```
+
+Optional verwendet `CHROME_BIN` ein vorhandenes Chromium. Mit
+`STILLCLIP_SHOTS_DIR` werden Vorschauen bei 1280 und 720 Pixel Breite gespeichert.
+Die Screenshots zeigen Browser-Vorschauen mit Testdaten.
+Die Browserprüfung ersetzt keinen Windows-Test von WASAPI, Grafikkartentreibern
+oder exklusiven Vollbildspielen.
+
+Die manuellen Prüfungen für Fensteraufnahme, Spielton und Spieleprofile stehen
+in [WINDOWS-CHECKS.md](WINDOWS-CHECKS.md). Für FFmpeg sind aktuelle Windows-Builds
+über die [offizielle Downloadseite](https://ffmpeg.org/download.html) verfügbar;
+die Liste in **Videoverarbeitung** und die Meldung unter **Aufnahmequelle**
+zeigen, welche Funktionen die ausgewählte Datei unterstützt.

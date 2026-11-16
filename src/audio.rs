@@ -8,7 +8,7 @@
 use crate::capture::AudioInput;
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
         mpsc, Arc,
     },
     thread::JoinHandle,
@@ -28,6 +28,8 @@ pub struct AudioDevice {
 pub enum AudioSource {
     /// Whatever currently plays on the default output device.
     Loopback,
+    /// Includes only the selected process and its children (Windows build 20348+).
+    Process { pid: u32 },
     /// A capture endpoint; an empty id means the default microphone.
     Microphone { device_id: String },
 }
@@ -36,8 +38,26 @@ impl AudioSource {
     pub fn label(&self) -> &'static str {
         match self {
             AudioSource::Loopback => "Systemton",
+            AudioSource::Process { .. } => "Spielton",
             AudioSource::Microphone { .. } => "Mikrofon",
         }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Meter(Arc<AtomicU32>);
+impl Meter {
+    fn feed(&self, bytes: &[u8], gain: f32) {
+        let peak = bytes
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .filter(|v| v.is_finite())
+            .map(|v| (v.abs() * gain).min(2.0))
+            .fold(0.0_f32, f32::max);
+        self.0.fetch_max(peak.to_bits(), Ordering::Relaxed);
+    }
+    pub fn take(&self) -> f32 {
+        f32::from_bits(self.0.swap(0, Ordering::Relaxed))
     }
 }
 
@@ -47,6 +67,7 @@ static PIPE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 pub struct AudioPipe {
     pub input: AudioInput,
     pub source: AudioSource,
+    pub meter: Meter,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -59,13 +80,22 @@ impl AudioPipe {
         let path = format!("\\\\.\\pipe\\stillclip-{}-{sequence}", std::process::id());
         let stop = Arc::new(AtomicBool::new(false));
         let (ready_sender, ready_receiver) = mpsc::channel::<Result<(), String>>();
+        let meter = Meter::default();
+        let thread_meter = meter.clone();
         let thread_source = source.clone();
         let thread_stop = stop.clone();
         let thread_path = path.clone();
         let thread = std::thread::Builder::new()
             .name(format!("audio-{sequence}"))
             .spawn(move || {
-                platform::run(thread_source, thread_path, thread_stop, ready_sender);
+                platform::run(
+                    thread_source,
+                    thread_path,
+                    thread_stop,
+                    ready_sender,
+                    thread_meter,
+                    gain,
+                );
             })
             .map_err(|error| format!("Der Audio-Thread konnte nicht gestartet werden: {error}"))?;
         let mut pipe = AudioPipe {
@@ -77,6 +107,7 @@ impl AudioPipe {
                 gain,
             },
             source,
+            meter,
             stop,
             thread: Some(thread),
         };
@@ -386,24 +417,123 @@ mod platform {
         device_id: String,
     }
 
+    #[windows::core::implement(
+        windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler
+    )]
+    struct ActivationComplete {
+        ready: std::sync::mpsc::Sender<()>,
+        _params: Box<windows::Win32::Media::Audio::AUDIOCLIENT_ACTIVATION_PARAMS>,
+    }
+
+    impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
+        for ActivationComplete_Impl
+    {
+        fn ActivateCompleted(
+            &self,
+            _: windows::core::Ref<
+                '_,
+                windows::Win32::Media::Audio::IActivateAudioInterfaceAsyncOperation,
+            >,
+        ) -> windows::core::Result<()> {
+            let _ = self.ready.send(());
+            Ok(())
+        }
+    }
+
+    fn process_client(pid: u32) -> Result<IAudioClient, String> {
+        use windows::{
+            core::{Interface, HRESULT},
+            Win32::{
+                Media::Audio::*,
+                System::{
+                    Com::{StructuredStorage::PROPVARIANT, BLOB},
+                    Variant::VT_BLOB,
+                },
+            },
+        };
+        let params = Box::new(AUDIOCLIENT_ACTIVATION_PARAMS {
+            ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+            Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+                ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                    TargetProcessId: pid,
+                    ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+                },
+            },
+        });
+        // This BLOB borrows the callback's Box. PROPVARIANT normally frees BLOB
+        // data with CoTaskMemFree, so its destructor must not own this pointer.
+        let mut variant = std::mem::ManuallyDrop::new(PROPVARIANT::default());
+        unsafe {
+            let value = &mut *variant.Anonymous.Anonymous;
+            value.vt = VT_BLOB;
+            value.Anonymous.blob = BLOB {
+                cbSize: std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
+                pBlobData: (&*params as *const AUDIOCLIENT_ACTIVATION_PARAMS)
+                    .cast_mut()
+                    .cast(),
+            };
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let callback: IActivateAudioInterfaceCompletionHandler = ActivationComplete {
+            ready: tx,
+            _params: params,
+        }
+        .into();
+        let operation = unsafe {
+            ActivateAudioInterfaceAsync(
+                VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+                &IAudioClient::IID,
+                Some(&*variant),
+                &callback,
+            )
+        }
+        .map_err(|e| format!("Spielton benötigt Windows 11 bzw. Build 20348 oder neuer: {e}"))?;
+        rx.recv_timeout(Duration::from_secs(8)).map_err(|_| {
+            "Windows hat die Spielton-Aufnahme nicht rechtzeitig aktiviert.".to_string()
+        })?;
+        let mut status = HRESULT::default();
+        let mut result = None;
+        unsafe { operation.GetActivateResult(&mut status, &mut result) }
+            .map_err(|e| e.to_string())?;
+        status.ok().map_err(|e| format!("Spielton ist für diesen Prozess nicht verfügbar (Windows Build 20348+ erforderlich): {e}"))?;
+        result
+            .ok_or("Windows hat keine Spielton-Schnittstelle geliefert.")?
+            .cast()
+            .map_err(|e| e.to_string())
+    }
+
     /// The endpoint id a source should currently use, when it follows the default.
-    fn current_default_id(enumerator: &IMMDeviceEnumerator, source: &AudioSource) -> Option<String> {
+    fn current_default_id(
+        enumerator: &IMMDeviceEnumerator,
+        source: &AudioSource,
+    ) -> Option<String> {
         let device = unsafe {
             match source {
-                AudioSource::Loopback => enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()?,
-                AudioSource::Microphone { device_id } if device_id.is_empty() => {
-                    enumerator.GetDefaultAudioEndpoint(eCapture, eConsole).ok()?
+                AudioSource::Loopback => {
+                    enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()?
                 }
+                AudioSource::Microphone { device_id } if device_id.is_empty() => enumerator
+                    .GetDefaultAudioEndpoint(eCapture, eConsole)
+                    .ok()?,
                 AudioSource::Microphone { .. } => return None,
+                AudioSource::Process { .. } => return None,
             }
         };
         Some(device_id(&device))
     }
 
-    fn open_stream(enumerator: &IMMDeviceEnumerator, source: &AudioSource) -> Result<Stream, String> {
+    fn open_stream(
+        enumerator: &IMMDeviceEnumerator,
+        source: &AudioSource,
+    ) -> Result<Stream, String> {
+        if let AudioSource::Process { pid } = source {
+            let client = process_client(*pid)?;
+            return initialize_stream(client, source, format!("process:{pid}"));
+        }
         let device = unsafe {
             match source {
                 AudioSource::Loopback => enumerator.GetDefaultAudioEndpoint(eRender, eConsole),
+                AudioSource::Process { .. } => unreachable!(),
                 AudioSource::Microphone { device_id } if device_id.is_empty() => {
                     enumerator.GetDefaultAudioEndpoint(eCapture, eConsole)
                 }
@@ -418,12 +548,22 @@ mod platform {
                 format!("Kein Wiedergabegerät für den Systemton gefunden: {error}")
             }
             AudioSource::Microphone { .. } => format!("Das Mikrofon wurde nicht gefunden: {error}"),
+            AudioSource::Process { .. } => format!("Spielton nicht verfügbar: {error}"),
         })?;
         let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None) }
             .map_err(|error| format!("Das Audiogerät konnte nicht geöffnet werden: {error}"))?;
+        initialize_stream(client, source, device_id(&device))
+    }
+
+    fn initialize_stream(
+        client: IAudioClient,
+        source: &AudioSource,
+        device_id: String,
+    ) -> Result<Stream, String> {
         let format = requested_format();
-        let mut flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-        if *source == AudioSource::Loopback {
+        let mut flags =
+            AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+        if matches!(source, AudioSource::Loopback | AudioSource::Process { .. }) {
             flags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
         }
         unsafe {
@@ -442,7 +582,7 @@ mod platform {
         Ok(Stream {
             client,
             capture,
-            device_id: device_id(&device),
+            device_id,
         })
     }
 
@@ -451,6 +591,8 @@ mod platform {
         path: String,
         stop: Arc<AtomicBool>,
         ready: Sender<Result<(), String>>,
+        meter: super::Meter,
+        gain: f32,
     ) {
         let _com = Com::init();
         let enumerator = match enumerator() {
@@ -477,7 +619,8 @@ mod platform {
         let _ = ready.send(Ok(()));
         // Wait for FFmpeg; `unblock` connects a dummy client when stopping early.
         let connected = unsafe { ConnectNamedPipe(pipe_handle(&pipe), std::ptr::null_mut()) };
-        if connected == 0 && std::io::Error::last_os_error().raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32)
+        if connected == 0
+            && std::io::Error::last_os_error().raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32)
         {
             return;
         }
@@ -500,7 +643,10 @@ mod platform {
             let mut remaining = frames;
             while remaining > 0 {
                 let chunk = remaining.min((silence.len() / frame_bytes) as u64);
-                if pipe.write_all(&silence[..chunk as usize * frame_bytes]).is_err() {
+                if pipe
+                    .write_all(&silence[..chunk as usize * frame_bytes])
+                    .is_err()
+                {
                     return false;
                 }
                 remaining -= chunk;
@@ -541,9 +687,13 @@ mod platform {
                 let mut flags = 0_u32;
                 let mut position = 0_u64;
                 if unsafe {
-                    stream
-                        .capture
-                        .GetBuffer(&mut data, &mut frames, &mut flags, None, Some(&mut position))
+                    stream.capture.GetBuffer(
+                        &mut data,
+                        &mut frames,
+                        &mut flags,
+                        None,
+                        Some(&mut position),
+                    )
                 }
                 .is_err()
                 {
@@ -557,12 +707,15 @@ mod platform {
                 }
                 let skip = clock.excess_before(desired, rate).min(u64::from(frames)) as usize;
                 let keep = frames as usize - skip;
-                let written = if flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0 || data.is_null() {
+                let written = if flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0
+                    || data.is_null()
+                {
                     write_silence(&mut pipe, keep as u64, &mut clock)
                 } else {
                     let bytes = unsafe {
                         std::slice::from_raw_parts(data.add(skip * frame_bytes), keep * frame_bytes)
                     };
+                    meter.feed(bytes, gain);
                     let ok = pipe.write_all(bytes).is_ok();
                     clock.written += keep as u64;
                     ok
@@ -586,7 +739,8 @@ mod platform {
                             break;
                         }
                     }
-                    let expected = ((qpc_100ns(frequency) - start).max(0) as u64) * rate / 10_000_000;
+                    let expected =
+                        ((qpc_100ns(frequency) - start).max(0) as u64) * rate / 10_000_000;
                     let idle = clock.idle_padding(expected, rate);
                     if idle > 0 && !write_silence(&mut pipe, idle, &mut clock) {
                         break 'capture;
@@ -619,7 +773,14 @@ mod platform {
     use super::AudioSource;
     use std::sync::{atomic::AtomicBool, mpsc::Sender, Arc};
 
-    pub fn run(_: AudioSource, _: String, _: Arc<AtomicBool>, ready: Sender<Result<(), String>>) {
+    pub fn run(
+        _: AudioSource,
+        _: String,
+        _: Arc<AtomicBool>,
+        ready: Sender<Result<(), String>>,
+        _: super::Meter,
+        _: f32,
+    ) {
         let _ = ready.send(Err("Audioaufnahme ist nur unter Windows verfügbar.".into()));
     }
     pub fn unblock(_: &str) {}
@@ -628,6 +789,20 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meter_applies_gain_ignores_invalid_samples_and_clears_idle_peak() {
+        let meter = Meter::default();
+        let bytes: Vec<u8> = [-0.25_f32, 0.75, f32::NAN, f32::INFINITY]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        meter.feed(&bytes, 2.0);
+        assert_eq!(meter.take(), 1.5);
+        assert_eq!(meter.take(), 0.0);
+        meter.feed(&bytes, 0.0);
+        assert_eq!(meter.take(), 0.0);
+    }
 
     #[test]
     fn clock_pads_gaps_and_trims_runaway_streams() {

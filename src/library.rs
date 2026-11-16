@@ -70,7 +70,16 @@ pub fn scan_clips(dir: &Path) -> Result<Vec<Clip>, String> {
 /// The oldest clips that have to go so the folder fits into `limit_bytes`.
 /// A limit of zero switches the cap off, and the newest clip is never on the
 /// list – a limit smaller than a single clip must not empty the folder.
+#[cfg(test)]
 pub fn over_limit(clips: &[Clip], limit_bytes: u64) -> Vec<Clip> {
+    over_limit_except(clips, limit_bytes, &std::collections::HashSet::new())
+}
+
+fn over_limit_except(
+    clips: &[Clip],
+    limit_bytes: u64,
+    protected: &std::collections::HashSet<String>,
+) -> Vec<Clip> {
     if limit_bytes == 0 || clips.len() < 2 {
         return Vec::new();
     }
@@ -83,6 +92,9 @@ pub fn over_limit(clips: &[Clip], limit_bytes: u64) -> Vec<Clip> {
     oldest.pop();
     let mut doomed = Vec::new();
     for clip in oldest {
+        if protected.contains(&index_key(&clip.path)) {
+            continue;
+        }
         if total <= limit_bytes {
             break;
         }
@@ -90,6 +102,42 @@ pub fn over_limit(clips: &[Clip], limit_bytes: u64) -> Vec<Clip> {
         doomed.push(clip.clone());
     }
     doomed
+}
+
+/// Keep failed deletions in the library so their index and markers survive.
+#[cfg(test)]
+pub fn clean_limit(
+    clips: &mut Vec<Clip>,
+    limit_bytes: u64,
+    remove: impl FnMut(&Path) -> io::Result<()>,
+) -> (usize, u64, usize) {
+    clean_limit_except(
+        clips,
+        limit_bytes,
+        &std::collections::HashSet::new(),
+        remove,
+    )
+}
+
+pub fn clean_limit_except(
+    clips: &mut Vec<Clip>,
+    limit_bytes: u64,
+    protected: &std::collections::HashSet<String>,
+    mut remove: impl FnMut(&Path) -> io::Result<()>,
+) -> (usize, u64, usize) {
+    let mut removed = Vec::new();
+    let mut freed = 0;
+    let mut failed = 0;
+    for clip in over_limit_except(clips, limit_bytes, protected) {
+        if remove(&clip.path).is_ok() {
+            freed += clip.bytes;
+            removed.push(clip.path);
+        } else {
+            failed += 1;
+        }
+    }
+    clips.retain(|clip| !removed.contains(&clip.path));
+    (removed.len(), freed, failed)
 }
 
 // Reserve the destination before copying: fs::copy alone can overwrite a clip.
@@ -224,6 +272,46 @@ pub struct IndexEntry {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Index {
     pub entries: HashMap<String, IndexEntry>,
+    #[serde(default)]
+    pub favorites: std::collections::HashSet<String>,
+    #[serde(default)]
+    pub annotations: HashMap<String, Annotation>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Annotation {
+    #[serde(default)]
+    pub game: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+impl Annotation {
+    pub fn normalized(game: &str, tags: &[String]) -> Result<Self, String> {
+        let game = game.trim();
+        if game.chars().count() > 80 || game.chars().any(char::is_control) {
+            return Err("Der Spielname darf höchstens 80 Zeichen enthalten.".into());
+        }
+        let mut unique = Vec::<String>::new();
+        for tag in tags.iter().map(|t| t.trim()).filter(|t| !t.is_empty()) {
+            if tag.chars().count() > 32 || tag.chars().any(char::is_control) || tag.contains(',') {
+                return Err("Tags dürfen höchstens 32 Zeichen und keine Kommas enthalten.".into());
+            }
+            if !unique
+                .iter()
+                .any(|t| t.to_lowercase() == tag.to_lowercase())
+            {
+                unique.push(tag.into());
+            }
+        }
+        if unique.len() > 12 {
+            return Err("Pro Clip sind höchstens 12 Tags möglich.".into());
+        }
+        Ok(Self {
+            game: game.into(),
+            tags: unique,
+        })
+    }
 }
 
 pub fn index_key(path: &Path) -> String {
@@ -242,10 +330,32 @@ impl Index {
     }
 
     pub fn save(&self, config_dir: &Path) {
-        if let Ok(bytes) = serde_json::to_vec(self) {
-            let _ = fs::create_dir_all(config_dir);
-            let _ = crate::settings::write_atomically(config_dir, "library-index.json", &bytes);
+        let _ = self.try_save(config_dir);
+    }
+
+    pub fn try_save(&self, config_dir: &Path) -> Result<(), String> {
+        let bytes = serde_json::to_vec(self).map_err(|e| e.to_string())?;
+        fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+        crate::settings::write_atomically(config_dir, "library-index.json", &bytes)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn annotate(
+        &mut self,
+        key: String,
+        value: Annotation,
+        config: &Path,
+    ) -> Result<(), String> {
+        let old = self.annotations.insert(key.clone(), value);
+        if let Err(error) = self.try_save(config) {
+            if let Some(value) = old {
+                self.annotations.insert(key, value);
+            } else {
+                self.annotations.remove(&key);
+            }
+            return Err(format!("Tags konnten nicht gespeichert werden: {error}"));
         }
+        Ok(())
     }
 
     /// The entry for a clip when it still matches the file on disk.
@@ -263,6 +373,8 @@ impl Index {
     pub fn prune(&mut self, clips: &[Clip], thumbnail_dir: &Path) {
         let keep: std::collections::HashSet<String> =
             clips.iter().map(|c| index_key(&c.path)).collect();
+        self.favorites.retain(|key| keep.contains(key));
+        self.annotations.retain(|key, _| keep.contains(key));
         let stale: Vec<String> = self
             .entries
             .keys()
@@ -299,6 +411,37 @@ pub fn thumbnail_name(clip: &Clip) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn annotations_normalize_persist_and_roll_back_on_write_failure() {
+        let dir = TestDir::new();
+        let value = Annotation::normalized(
+            " VALORANT ",
+            &[" Ace ".into(), "ace".into(), "Clutch".into(), " ".into()],
+        )
+        .unwrap();
+        assert_eq!(value.tags, ["Ace", "Clutch"]);
+        assert_eq!(value.game, "VALORANT");
+        assert!(Annotation::normalized("Game", &["x".repeat(33)]).is_err());
+        assert!(Annotation::normalized(
+            "Game",
+            &(0..13).map(|i| i.to_string()).collect::<Vec<_>>()
+        )
+        .is_err());
+        let mut index = Index::default();
+        index
+            .annotate("clip.mp4".into(), value.clone(), &dir.0)
+            .unwrap();
+        assert_eq!(Index::load(&dir.0).annotations["clip.mp4"], value);
+        let blocked = dir.0.join("file");
+        fs::write(&blocked, "blocked").unwrap();
+        assert!(index
+            .annotate("clip.mp4".into(), Annotation::default(), &blocked)
+            .is_err());
+        assert_eq!(index.annotations["clip.mp4"], value);
+        let old: Index = serde_json::from_str(r#"{"entries":{}}"#).unwrap();
+        assert!(old.annotations.is_empty());
+    }
+
     struct TestDir(PathBuf);
 
     impl TestDir {
@@ -331,18 +474,71 @@ mod tests {
     }
 
     #[test]
-    fn storage_limit_removes_the_oldest_clips_only() {
-        let clips = vec![
-            clip("neu", 3, 1),
-            clip("mittel", 4, 20),
-            clip("alt", 5, 90),
+    fn failed_cleanup_keeps_the_clip_and_its_markers_in_the_index() {
+        let mut clips = vec![clip("old", 2, 3), clip("locked", 2, 2), clip("new", 2, 1)];
+        let locked = index_key(&clips[1].path);
+        let mut index = Index::default();
+        index.entries.insert(
+            locked.clone(),
+            IndexEntry {
+                markers: vec![2.5],
+                ..Default::default()
+            },
+        );
+        let (count, _, failed) = clean_limit(&mut clips, 2 * 1024 * 1024 * 1024, |path| {
+            if index_key(path) == locked {
+                Err(io::ErrorKind::PermissionDenied.into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!((count, failed, clips.len()), (1, 1, 2));
+        index.prune(&clips, Path::new("unused-thumbnails"));
+        assert_eq!(index.entries[&locked].markers, vec![2.5]);
+    }
+
+    #[test]
+    fn favorites_survive_cleanup_and_round_trip_without_blocking_other_deletions() {
+        let mut clips = vec![
+            clip("favorite", 2, 4),
+            clip("old", 2, 3),
+            clip("middle", 2, 2),
+            clip("new", 2, 1),
         ];
+        let favorite = index_key(&clips[0].path);
+        let mut index = Index::default();
+        index.favorites.insert(favorite.clone());
+        let (count, _, failed) = clean_limit_except(
+            &mut clips,
+            4 * 1024 * 1024 * 1024,
+            &index.favorites,
+            |path| {
+                assert_ne!(index_key(path), favorite);
+                Ok(())
+            },
+        );
+        assert_eq!((count, failed), (2, 0));
+        assert_eq!(clips.len(), 2);
+        index.prune(&clips, Path::new("unused"));
+        let dir = TestDir::new();
+        index.save(&dir.0);
+        assert!(Index::load(&dir.0).favorites.contains(&favorite));
+        let legacy: Index = serde_json::from_str("{\"entries\":{}}").unwrap();
+        assert!(legacy.favorites.is_empty());
+    }
+
+    #[test]
+    fn storage_limit_removes_the_oldest_clips_only() {
+        let clips = vec![clip("neu", 3, 1), clip("mittel", 4, 20), clip("alt", 5, 90)];
         // Off by default and quiet while the folder fits.
         assert!(over_limit(&clips, 0).is_empty());
         assert!(over_limit(&clips, 12 * 1024 * 1024 * 1024).is_empty());
         // 10 GB: the oldest clip goes, the rest stays.
         let doomed = over_limit(&clips, 10 * 1024 * 1024 * 1024);
-        assert_eq!(doomed.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["alt"]);
+        assert_eq!(
+            doomed.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["alt"]
+        );
         // 3 GB: everything but the newest clip, which is never deleted.
         let doomed = over_limit(&clips, 3 * 1024 * 1024 * 1024);
         assert_eq!(

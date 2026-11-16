@@ -160,7 +160,10 @@ impl Hotkey {
     }
     pub fn modifiers(&self) -> u32 {
         // MOD_ALT 1, MOD_CONTROL 2, MOD_SHIFT 4, MOD_WIN 8
-        (self.alt as u32) | ((self.ctrl as u32) << 1) | ((self.shift as u32) << 2) | ((self.win as u32) << 3)
+        (self.alt as u32)
+            | ((self.ctrl as u32) << 1)
+            | ((self.shift as u32) << 2)
+            | ((self.win as u32) << 3)
     }
     pub fn virtual_key(&self) -> Option<u32> {
         virtual_key(&self.key)
@@ -292,7 +295,10 @@ fn canonical_key(name: &str) -> Option<String> {
     }
     if trimmed.len() == 1 && trimmed.is_ascii() {
         let upper = trimmed.to_ascii_uppercase();
-        if upper.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()) {
+        if upper
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        {
             return Some(upper);
         }
     }
@@ -308,6 +314,35 @@ where
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(T::deserialize(value).unwrap_or_default())
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct GameProfile {
+    pub exe: String,
+    #[serde(deserialize_with = "lenient")]
+    pub quality: Quality,
+    pub fps: u32,
+    pub replay_seconds: u32,
+    pub microphone: bool,
+    pub system_audio: bool,
+    pub capture_window: bool,
+    pub game_audio: bool,
+}
+
+impl Default for GameProfile {
+    fn default() -> Self {
+        Self {
+            exe: String::new(),
+            quality: Quality::P1080,
+            fps: 60,
+            replay_seconds: 30,
+            microphone: false,
+            system_audio: true,
+            capture_window: false,
+            game_audio: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -366,6 +401,12 @@ pub struct Settings {
     pub auto_record_games: bool,
     pub builtin_games: bool,
     pub custom_games: Vec<GameEntry>,
+    #[serde(deserialize_with = "lenient")]
+    pub game_profiles: Vec<GameProfile>,
+    pub capture_window: bool,
+    pub game_audio: bool,
+    /// Manual target when no watched game is active. Only an executable name.
+    pub target_exe: String,
 }
 
 impl Default for Settings {
@@ -404,11 +445,58 @@ impl Default for Settings {
             auto_record_games: true,
             builtin_games: true,
             custom_games: Vec::new(),
+            game_profiles: Vec::new(),
+            capture_window: false,
+            game_audio: false,
+            target_exe: String::new(),
         }
     }
 }
 
 impl Settings {
+    pub fn for_game(&self, exe: &str) -> Self {
+        let mut effective = self.clone();
+        let exe = crate::games::normalize_exe(exe);
+        if let Some(profile) = self.game_profiles.iter().find(|p| p.exe == exe) {
+            effective.quality = profile.quality;
+            effective.fps = profile.fps;
+            effective.replay_seconds = profile.replay_seconds;
+            effective.microphone = profile.microphone;
+            effective.system_audio = profile.system_audio;
+            effective.capture_window = profile.capture_window;
+            effective.game_audio = profile.game_audio;
+        }
+        effective
+    }
+
+    /// Values captured by a running session. Keep UI and backend lock policy in sync.
+    pub fn capture_changed(&self, next: &Self) -> bool {
+        self.clips_dir != next.clips_dir
+            || self.game_profiles != next.game_profiles
+            || self.capture_window != next.capture_window
+            || self.game_audio != next.game_audio
+            || self.target_exe != next.target_exe
+            || self.fps != next.fps
+            || self.quality != next.quality
+            || self.encoder != next.encoder
+            || self.display != next.display
+            || self.follow_game_display != next.follow_game_display
+            || self.show_cursor != next.show_cursor
+            || self.system_audio != next.system_audio
+            || self.microphone != next.microphone
+            || self.microphone_device != next.microphone_device
+            || self.microphone_separate_track != next.microphone_separate_track
+            || self.system_volume != next.system_volume
+            || self.microphone_volume != next.microphone_volume
+            || self.keep_full_session != next.keep_full_session
+            || self.precise_clips != next.precise_clips
+            || self.replay_seconds != next.replay_seconds
+            || self.replay_seconds_long != next.replay_seconds_long
+            || self.marker_before != next.marker_before
+            || self.marker_after != next.marker_after
+            || self.min_free_gb != next.min_free_gb
+    }
+
     /// Clamps every numeric value into its supported range.
     pub fn sanitized(mut self) -> Self {
         if self.clips_dir.as_os_str().is_empty() {
@@ -416,10 +504,13 @@ impl Settings {
         }
         self.replay_seconds = mechanics::replay_seconds(u64::from(self.replay_seconds));
         if self.replay_seconds_long > 0 {
-            self.replay_seconds_long = mechanics::replay_seconds(u64::from(self.replay_seconds_long));
+            self.replay_seconds_long =
+                mechanics::replay_seconds(u64::from(self.replay_seconds_long));
         }
         self.fps = mechanics::fps(u64::from(self.fps));
-        self.marker_before = self.marker_before.clamp(1, mechanics::MAX_REPLAY_SECONDS as u32);
+        self.marker_before = self
+            .marker_before
+            .clamp(1, mechanics::MAX_REPLAY_SECONDS as u32);
         self.marker_after = self.marker_after.min(mechanics::MAX_REPLAY_SECONDS as u32);
         self.system_volume = self.system_volume.min(MAX_VOLUME);
         self.microphone_volume = self.microphone_volume.min(MAX_VOLUME);
@@ -434,7 +525,8 @@ impl Settings {
             self.hotkey_replay_long = Hotkey::none();
         }
         if self.hotkey_marker.is_set()
-            && (self.hotkey_marker == self.hotkey_replay || self.hotkey_marker == self.hotkey_replay_long)
+            && (self.hotkey_marker == self.hotkey_replay
+                || self.hotkey_marker == self.hotkey_replay_long)
         {
             self.hotkey_marker = Hotkey::none();
         }
@@ -453,6 +545,14 @@ impl Settings {
             }
         }
         self.custom_games = games;
+        let mut seen = std::collections::HashSet::new();
+        self.game_profiles.retain_mut(|profile| {
+            profile.exe = crate::games::normalize_exe(&profile.exe);
+            profile.fps = mechanics::fps(u64::from(profile.fps));
+            profile.replay_seconds = mechanics::replay_seconds(u64::from(profile.replay_seconds));
+            !profile.exe.is_empty() && seen.insert(profile.exe.clone())
+        });
+        self.target_exe = crate::games::normalize_exe(&self.target_exe);
         self
     }
 
@@ -616,6 +716,36 @@ mod tests {
     }
 
     #[test]
+    fn profiles_are_normalized_persistent_and_do_not_change_global_defaults() {
+        let mut settings = Settings::default();
+        settings.game_profiles.push(GameProfile {
+            exe: "VALORANT-Win64-Shipping.EXE".into(),
+            quality: Quality::P1080,
+            fps: 120,
+            replay_seconds: 60,
+            microphone: true,
+            capture_window: true,
+            game_audio: true,
+            system_audio: true,
+        });
+        let settings = settings.sanitized();
+        let effective = settings.for_game("valorant-win64-shipping.exe");
+        assert_eq!((effective.fps, effective.replay_seconds), (120, 60));
+        assert!(effective.capture_window && effective.game_audio && effective.microphone);
+        assert_eq!(settings.quality, Quality::P720);
+        assert_eq!(settings.replay_seconds, 30);
+        assert_eq!(settings.for_game("missing.exe"), settings);
+        let dir = TestDir::new();
+        save_settings(&dir.0, &settings).unwrap();
+        assert_eq!(load_settings(&dir.0), settings);
+        let mut changed = settings.clone();
+        changed.game_profiles[0].fps = 60;
+        assert!(settings.capture_changed(&changed));
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.game_profiles.is_empty());
+    }
+
+    #[test]
     fn settings_with_a_byte_order_mark_still_load() {
         let directory = TestDir::new();
         let mut bytes = vec![0xEF, 0xBB, 0xBF];
@@ -648,6 +778,37 @@ mod tests {
         let mut settings = Settings::default();
         settings.hotkey_record = Hotkey::key("F8");
         assert!(!settings.sanitized().hotkey_record.is_set());
+    }
+
+    #[test]
+    fn running_capture_locks_every_session_setting_but_not_shortcuts() {
+        let original = Settings::default();
+        for field in [
+            "replay_seconds",
+            "replay_seconds_long",
+            "marker_before",
+            "marker_after",
+            "min_free_gb",
+        ] {
+            let mut value = serde_json::to_value(&original).unwrap();
+            value[field] = serde_json::json!(600);
+            let changed: Settings = serde_json::from_value(value).unwrap();
+            assert!(original.capture_changed(&changed), "{field}");
+        }
+        for field in [
+            "precise_clips",
+            "microphone_separate_track",
+            "follow_game_display",
+        ] {
+            let mut value = serde_json::to_value(&original).unwrap();
+            value[field] = serde_json::json!(!value[field].as_bool().unwrap());
+            let changed: Settings = serde_json::from_value(value).unwrap();
+            assert!(original.capture_changed(&changed), "{field}");
+        }
+        let mut changed = original.clone();
+        changed.hotkey_replay = Hotkey::key("F9");
+        changed.storage_limit_gb = 50;
+        assert!(!original.capture_changed(&changed));
     }
 
     #[test]
@@ -695,7 +856,12 @@ mod tests {
 
     #[test]
     fn quality_presets_round_trip() {
-        for quality in [Quality::P720, Quality::P1080, Quality::P1440, Quality::Native] {
+        for quality in [
+            Quality::P720,
+            Quality::P1080,
+            Quality::P1440,
+            Quality::Native,
+        ] {
             assert_eq!(Quality::parse(quality.id()), Some(quality));
         }
         for encoder in [

@@ -1,5 +1,5 @@
 //! The application icon, rasterized at runtime so no image assets ship.
-//! A rounded square outline with a dot in the middle, matching the brand mark.
+//! A square outline with a square in the middle, matching the brand mark.
 
 pub const SIZE: u32 = 32;
 
@@ -21,16 +21,16 @@ pub fn rgba(size: u32) -> Vec<u8> {
     let mut pixels = vec![0_u8; (size * size * 4) as usize];
     let scale = size as f32 / 32.0;
     let centre = size as f32 / 2.0;
-    let background = (21.0, 22.0, 27.0);
-    let accent = (190.0, 176.0, 255.0);
+    let background = (9.0, 9.0, 9.0);
+    let accent = (229.0, 160.0, 183.0);
     for y in 0..size {
         for x in 0..size {
             let px = (x as f32 + 0.5 - centre) / scale;
             let py = (y as f32 + 0.5 - centre) / scale;
-            // Outer rounded square: 26 px wide with a 7 px corner radius.
-            let outer = rounded_box(px, py, 13.0, 7.0);
-            let inner = rounded_box(px, py, 10.6, 5.0);
-            let dot = (px * px + py * py).sqrt() - 4.0;
+            // Square outline, matching the terminal interface.
+            let outer = rounded_box(px, py, 13.0, 0.0);
+            let inner = rounded_box(px, py, 10.6, 0.0);
+            let dot = rounded_box(px, py, 4.0, 0.0);
             let shape = 1.0 - smoothstep(-0.6, 0.6, outer);
             let ring = (1.0 - smoothstep(-0.6, 0.6, outer)) * smoothstep(-0.6, 0.6, inner);
             let dot_alpha = 1.0 - smoothstep(-0.6, 0.6, dot);
@@ -63,7 +63,17 @@ pub fn hicon(size: u32) -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
     use windows_sys::Win32::UI::WindowsAndMessaging::CreateIcon;
     let colour = bgra(size);
     let mask = vec![0_u8; ((size + 7) / 8 * size) as usize];
-    unsafe { CreateIcon(std::ptr::null_mut(), size as i32, size as i32, 1, 32, mask.as_ptr(), colour.as_ptr()) }
+    unsafe {
+        CreateIcon(
+            std::ptr::null_mut(),
+            size as i32,
+            size as i32,
+            1,
+            32,
+            mask.as_ptr(),
+            colour.as_ptr(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -77,7 +87,10 @@ mod tests {
         assert_eq!(pixels[3], 0, "corner must be transparent");
         let centre = (((SIZE / 2) * SIZE + SIZE / 2) * 4) as usize;
         assert_eq!(pixels[centre + 3], 255);
-        assert!(pixels[centre + 2] > 200, "centre dot uses the accent colour");
+        assert!(
+            pixels[centre] > 200 && pixels[centre + 2] > 150,
+            "centre dot uses the accent colour"
+        );
         // The design is symmetric, so the icon reads correctly in either row order.
         let top = &pixels[(4 * SIZE * 4) as usize..(5 * SIZE * 4) as usize];
         let bottom = &pixels[((SIZE - 5) * SIZE * 4) as usize..((SIZE - 4) * SIZE * 4) as usize];

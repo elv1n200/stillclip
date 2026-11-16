@@ -1,0 +1,51 @@
+name: Build and verify
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install FFmpeg for synthetic tests
+        run: choco install ffmpeg --yes --no-progress
+      - name: Unit and regression tests
+        run: cargo test --locked
+      - name: Synthetic video tests (no screen or microphone capture)
+        run: cargo test --locked synthetic_ -- --ignored --nocapture
+      - name: Release build
+        run: cargo build --locked --release
+      - name: Package portable Windows app
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist/stillclip -Force
+          Copy-Item target/release/stillclip.exe, README.md, CREDITS.md, WINDOWS-CHECKS.md dist/stillclip
+          Compress-Archive -Path dist/stillclip/* -DestinationPath dist/stillclip-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stillclip-windows-x64
+          path: dist/stillclip-windows-x64.zip
+          if-no-files-found: error
+  interface:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm test

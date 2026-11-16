@@ -1,5 +1,7 @@
 # Build output
 /target/
+/node_modules/
+/dist/
 
 # Local runtime data created next to the executable
 /clips/
