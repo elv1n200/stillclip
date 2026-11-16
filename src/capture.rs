@@ -645,8 +645,6 @@ pub fn build_command(ffmpeg: &Path, request: &CaptureRequest) -> Command {
     for input in request.audio {
         command
             .args([
-                "-thread_queue_size",
-                "4096",
                 "-f",
                 input.sample_format,
                 "-ar",

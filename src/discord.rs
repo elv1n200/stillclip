@@ -232,10 +232,11 @@ fn encode_with_limit(
                 .arg(plan.video_bps.to_string())
                 .arg("-threads")
                 .arg(threads.to_string())
-                .arg("-pass")
+                .arg("-pass:v")
                 .arg(pass.to_string())
-                .arg("-passlogfile")
+                .arg("-passlogfile:v")
                 .arg(&passlog);
+            // Pass statistics belong to video only; AAC is encoded once.
             if pass == 1 {
                 encode.args(["-an", "-f", "null"]).arg(if cfg!(windows) {
                     "NUL"

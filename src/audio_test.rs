@@ -66,8 +66,6 @@ fn mix_command(
     cmd.args(["-hide_banner", "-v", "error", "-nostdin", "-y"]);
     for input in inputs {
         cmd.args([
-            "-thread_queue_size",
-            "512",
             "-probesize",
             "32",
             "-analyzeduration",
