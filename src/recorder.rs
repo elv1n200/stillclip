@@ -281,6 +281,22 @@ fn scan_segments(dir: &Path, list_path: &Path) -> Vec<Segment> {
     segments
 }
 
+/// Time span still backed by files, rather than the complete CSV history.
+fn available_span(dir: &Path, list_path: &Path) -> Option<(f64, f64)> {
+    // CSV history includes files already removed by the ring. Only live
+    // files can back a marker that the UI still offers to save.
+    let segments = scan_segments(dir, list_path);
+    let from = segments
+        .iter()
+        .filter_map(|s| s.start)
+        .fold(f64::INFINITY, f64::min);
+    let to = segments
+        .iter()
+        .filter_map(|s| s.end)
+        .fold(f64::NEG_INFINITY, f64::max);
+    (from.is_finite() && to > from).then_some((from, to))
+}
+
 /// Picks the newest segments whose combined length covers `wanted` seconds.
 /// Unknown (in-progress) durations are estimated with `estimate`.
 pub fn tail_segments(segments: &[Segment], wanted: f64, estimate: f64) -> Vec<Segment> {
@@ -686,19 +702,7 @@ impl Recorder {
     /// can still be saved before the ring deletes it.
     pub fn buffered_span(&self) -> Option<(f64, f64)> {
         let session = self.session.as_ref()?;
-        let segments = parse_segment_list(
-            &fs::read_to_string(&session.list_path).unwrap_or_default(),
-            &session.dir,
-        );
-        let from = segments
-            .iter()
-            .filter_map(|s| s.start)
-            .fold(f64::INFINITY, f64::min);
-        let to = segments
-            .iter()
-            .filter_map(|s| s.end)
-            .fold(f64::NEG_INFINITY, f64::max);
-        (from.is_finite() && to > from).then_some((from, to))
+        available_span(&session.dir, &session.list_path)
     }
 
     /// Saves the window around a marked moment. `at` is seconds since this
@@ -1646,6 +1650,26 @@ pub fn make_thumbnail(ffmpeg: &Path, input: &Path, output: &Path, at: f64) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn marker_availability_excludes_segments_already_removed_from_the_ring() {
+        let dir = env::temp_dir().join(format!("stillclip-span-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let list = dir.join("segments.csv");
+        fs::write(
+            &list,
+            "seg-000000.ts,0,5\nseg-000001.ts,5,10\nseg-000002.ts,10,15\n",
+        )
+        .unwrap();
+        fs::write(dir.join("seg-000001.ts"), b"video").unwrap();
+        fs::write(dir.join("seg-000002.ts"), b"video").unwrap();
+        assert_eq!(available_span(&dir, &list), Some((5.0, 15.0)));
+        fs::remove_file(dir.join("seg-000001.ts")).unwrap();
+        assert_eq!(available_span(&dir, &list), Some((10.0, 15.0)));
+        fs::remove_file(dir.join("seg-000002.ts")).unwrap();
+        assert_eq!(available_span(&dir, &list), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn parses_media_duration_and_rejects_invalid_media() {

@@ -17,6 +17,18 @@ const fs = require('node:fs/promises');
       await route.fulfill({ path: path.join(__dirname, '../ui', name),
         contentType: name.endsWith('.html') ? 'text/html' : name.endsWith('.css') ? 'text/css' : 'text/javascript' });
     });
+    const preview = await fs.readFile(path.join(__dirname, 'fixtures/preview.webm'));
+    await page.route('http://clip.localhost/**', route => {
+      const range = route.request().headers().range;
+      const match = range && /^bytes=(\d+)-(\d*)$/.exec(range);
+      const start = match ? Number(match[1]) : 0;
+      const end = match && match[2] ? Math.min(Number(match[2]), preview.length - 1) : preview.length - 1;
+      return route.fulfill({ body: preview.subarray(start, end + 1), contentType: 'video/webm',
+        status: match ? 206 : 200,
+        headers: { 'Access-Control-Allow-Origin': 'http://app.localhost', 'Accept-Ranges': 'bytes',
+          ...(match ? { 'Content-Range': `bytes ${start}-${end}/${preview.length}` } : {}) }
+      });
+    });
     await page.addInitScript(() => { window.messages = []; window.ipc = { postMessage: text => window.messages.push(JSON.parse(text)) }; });
     await page.goto('http://app.localhost/');
     await page.evaluate(() => window.setState({ version: '0.5.0', ffmpeg_available: true,
@@ -68,7 +80,34 @@ const fs = require('node:fs/promises');
       if (shotDir) await page.screenshot({ path: path.join(shotDir, `library-${width}.png`), animations: 'disabled' });
       await page.click('#nav-settings');
     }
+    await page.setViewportSize({ width: 1280, height: 840 });
+    await page.click('#nav-library');
+    await page.evaluate(() => window.setState({ clips: [{
+      id: 1, name: 'Testaufnahme', src: 'http://clip.localhost/1', path: 'test.webm',
+      duration: 3, width: 320, height: 180, audio: false, bytes: 42000,
+      extension: 'webm', created: 1794816000, markers: [1, 2]
+    }] }));
+    await page.fill('#search', 'kein-treffer');
+    assert.equal(await page.locator('.clip-card').count(), 0);
+    await page.fill('#search', 'Test');
+    await page.locator('.clip-card').click();
+    await page.waitForFunction(() => document.getElementById('editor-video').readyState >= 2);
+    assert(await page.locator('#video-error').isHidden());
+    assert.equal(await page.locator('.timeline-mark').count(), 2);
+    assert(await page.locator('#trim-clip').isEnabled());
+    await page.locator('.timeline-mark').first().click();
+    await page.waitForFunction(() => Math.abs(document.getElementById('editor-video').currentTime - 1) < 0.1);
+    await page.click('#trim-clip');
+    assert.equal(await page.evaluate(() => window.messages.at(-1).action), 'trim');
+    await page.evaluate(() => { document.querySelector('.editor').scrollTop = 0; });
+    if (shotDir) await page.screenshot({ path: path.join(shotDir, 'editor-1280.png'), animations: 'disabled' });
+    await page.setViewportSize({ width: 720, height: 600 });
+    assert(await page.evaluate(() => {
+      const box = document.querySelector('.editor').getBoundingClientRect();
+      return box.left >= 0 && box.right <= innerWidth;
+    }), 'Editor must fit the minimum window size');
+    await page.click('#close-editor');
     assert.deepEqual(errors, []);
-    console.log('UI checks passed: recording controls during export, settings locks, navigation, square controls, 1280/720px layout.');
+    console.log('UI checks passed: recording controls during export, settings locks, navigation, square controls, 1280/720px layout, real video playback, markers and trim IPC.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

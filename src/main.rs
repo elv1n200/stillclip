@@ -1523,11 +1523,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .build(&event_loop)?;
     app.window_visible = !start_hidden;
     platform::set_window_icon(window.hwnd() as isize);
+    platform::style_window(window.hwnd() as isize);
     eprintln!("Stillclip: creating WebView");
     let mut context = WebContext::new(Some(app.config.join("webview")));
     let media = app.media.clone();
     let view = WebViewBuilder::new_with_web_context(&mut context)
-        .with_background_color((17, 18, 23, 255))
+        .with_background_color((9, 9, 9, 255))
         .with_custom_protocol("app".into(), |_, request| {
             match asset(request.uri().path()) {
                 Some((bytes, mime)) => Response::builder()
