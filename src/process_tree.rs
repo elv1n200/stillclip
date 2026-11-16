@@ -104,7 +104,7 @@ mod platform {
             found = unsafe { Thread32Next(snapshot.0, &mut entry) };
         }
         Err(io::Error::other(
-            "Der Startthread von FFmpeg wurde nicht gefunden.",
+            crate::i18n::text("Der Startthread von FFmpeg wurde nicht gefunden.", "FFmpeg's initial thread was not found."),
         ))
     }
 

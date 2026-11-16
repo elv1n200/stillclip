@@ -100,7 +100,7 @@ impl Display {
             None => self.name.clone(),
         };
         if self.primary {
-            format!("{base} · {}×{} · Hauptbildschirm", self.width, self.height)
+            crate::tr_format!("{base} · {}×{} · Hauptbildschirm", "{base} · {}×{} · Main display", self.width, self.height)
         } else {
             format!("{base} · {}×{}", self.width, self.height)
         }

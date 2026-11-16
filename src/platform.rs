@@ -25,6 +25,21 @@ fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
+/// Honor Windows' actual Videos folder, including redirected user folders.
+pub fn videos_dir() -> Option<PathBuf> {
+    unsafe {
+        let mut path = std::ptr::null_mut();
+        if SHGetKnownFolderPath(&FOLDERID_Videos, 0, std::ptr::null_mut(), &mut path) != 0 || path.is_null() {
+            return None;
+        }
+        let mut len = 0;
+        while *path.add(len) != 0 { len += 1; }
+        let result = PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(path, len)));
+        CoTaskMemFree(path.cast());
+        Some(result)
+    }
+}
+
 /// Windows 11 otherwise rounds the native window even when every UI panel is
 /// square. Older Windows versions simply ignore unsupported DWM attributes.
 pub fn style_window(hwnd: isize) {
@@ -64,7 +79,7 @@ impl InstanceGuard {
         unsafe {
             let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
             if handle.is_null() {
-                return Err("Die Instanzsperre konnte nicht geöffnet werden.".into());
+                return Err(crate::i18n::text("Die Instanzsperre konnte nicht geöffnet werden.", "Could not open the application instance lock.").into());
             }
             if GetLastError() == ERROR_ALREADY_EXISTS {
                 CloseHandle(handle);
@@ -120,14 +135,14 @@ pub fn free_bytes(path: &Path) -> Option<u64> {
 pub fn pick_file(owner: isize, executable: bool) -> Option<PathBuf> {
     let mut filename = vec![0u16; 32768];
     let filter = wide(if executable {
-        "FFmpeg\0ffmpeg.exe\0Programme\0*.exe\0"
+        crate::i18n::text("FFmpeg\0ffmpeg.exe\0Programme\0*.exe\0", "FFmpeg\0ffmpeg.exe\0Programs\0*.exe\0")
     } else {
         "Videos\0*.mp4;*.mkv;*.mov;*.webm;*.avi;*.m4v\0"
     });
     let title = wide(if executable {
-        "FFmpeg auswählen"
+        crate::i18n::text("FFmpeg auswählen", "Choose FFmpeg")
     } else {
-        "Video importieren"
+        crate::i18n::text("Video importieren", "Import video")
     });
     let mut dialog: OPENFILENAMEW = unsafe { std::mem::zeroed() };
     dialog.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
@@ -147,8 +162,8 @@ pub fn pick_file(owner: isize, executable: bool) -> Option<PathBuf> {
 /// Lets the user choose any program, for the game list.
 pub fn pick_program(owner: isize) -> Option<PathBuf> {
     let mut filename = vec![0u16; 32768];
-    let filter = wide("Programme\0*.exe\0");
-    let title = wide("Spiel oder Programm auswählen");
+    let filter = wide(crate::i18n::text("Programme\0*.exe\0", "Programs\0*.exe\0"));
+    let title = wide(crate::i18n::text("Spiel oder Programm auswählen", "Choose a game or program"));
     let mut dialog: OPENFILENAMEW = unsafe { std::mem::zeroed() };
     dialog.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
     dialog.hwndOwner = owner as HWND;
@@ -165,7 +180,7 @@ pub fn pick_program(owner: isize) -> Option<PathBuf> {
 }
 
 pub fn pick_folder(owner: isize) -> Option<PathBuf> {
-    let title = wide("Ordner für deine lokalen Clips auswählen");
+    let title = wide(crate::i18n::text("Ordner für deine lokalen Clips auswählen", "Choose a folder for your local clips"));
     let mut display = vec![0u16; 260];
     let dialog = BROWSEINFOW {
         hwndOwner: owner as HWND,
@@ -209,7 +224,7 @@ fn shell_open(path: &Path) -> Result<(), String> {
     if code > 32 {
         Ok(())
     } else {
-        Err(format!("Konnte nicht geöffnet werden (Windows {code})."))
+        Err(crate::tr_format!("Konnte nicht geöffnet werden (Windows {code}).", "Could not open (Windows {code})."))
     }
 }
 
@@ -230,13 +245,13 @@ pub fn reveal_in_explorer(path: &Path) -> Result<(), String> {
         .arg(argument)
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("Der Explorer konnte nicht geöffnet werden: {error}"))
+        .map_err(|error| crate::tr_format!("Der Explorer konnte nicht geöffnet werden: {error}", "Could not open File Explorer: {error}"))
 }
 
 /// Moves a file to the recycle bin so a mistaken delete can be undone.
 pub fn recycle(path: &Path) -> Result<(), String> {
     if !path.is_file() {
-        return Err("Die Datei wurde nicht gefunden.".into());
+        return Err(crate::i18n::text("Die Datei wurde nicht gefunden.", "File not found.").into());
     }
     let mut from: Vec<u16> = path.as_os_str().encode_wide().collect();
     from.push(0);
@@ -249,8 +264,8 @@ pub fn recycle(path: &Path) -> Result<(), String> {
     if code == 0 && operation.fAnyOperationsAborted == 0 {
         Ok(())
     } else {
-        Err(format!(
-            "Der Clip konnte nicht in den Papierkorb verschoben werden (Code {code})."
+        Err(crate::tr_format!(
+            "Der Clip konnte nicht in den Papierkorb verschoben werden (Code {code}).", "Could not move the clip to the Recycle Bin (code {code})."
         ))
     }
 }
@@ -300,8 +315,8 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
             std::ptr::null_mut(),
         );
         if created != 0 {
-            return Err(format!(
-                "Der Autostart-Schlüssel ist nicht erreichbar (Fehler {created})."
+            return Err(crate::tr_format!(
+                "Der Autostart-Schlüssel ist nicht erreichbar (Fehler {created}).", "Could not access the startup registry key (error {created})."
             ));
         }
         let result = if enabled {
@@ -327,8 +342,8 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
         if result == 0 {
             Ok(())
         } else {
-            Err(format!(
-                "Der Autostart konnte nicht geändert werden (Fehler {result})."
+            Err(crate::tr_format!(
+                "Der Autostart konnte nicht geändert werden (Fehler {result}).", "Could not change startup settings (error {result})."
             ))
         }
     }
@@ -487,10 +502,10 @@ unsafe extern "system" fn tray_window_proc(
                 WM_RBUTTONUP | WM_CONTEXTMENU => {
                     let menu = CreatePopupMenu();
                     let recording = TRAY_RECORDING.load(Ordering::SeqCst);
-                    let show = wide("Stillclip öffnen");
-                    let toggle = wide(if recording { "Aufnahme beenden" } else { "Aufnahme starten" });
-                    let replay = wide("Moment sichern");
-                    let quit = wide("Beenden");
+                    let show = wide(crate::i18n::text("Stillclip öffnen", "Open Stillclip"));
+                    let toggle = wide(if recording { crate::i18n::text("Aufnahme beenden", "Stop recording") } else { crate::i18n::text("Aufnahme starten", "Start recording") });
+                    let replay = wide(crate::i18n::text("Moment sichern", "Save replay"));
+                    let quit = wide(crate::i18n::text("Beenden", "Quit"));
                     AppendMenuW(menu, MF_STRING, MENU_SHOW, show.as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                     AppendMenuW(menu, MF_STRING, MENU_TOGGLE, toggle.as_ptr());

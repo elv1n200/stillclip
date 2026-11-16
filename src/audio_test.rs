@@ -20,7 +20,7 @@ pub fn record(
     ready: impl FnOnce(Meters),
 ) -> Result<Preview, String> {
     if sources.is_empty() {
-        return Err("Aktiviere Systemton oder Mikrofon für den Audio-Test.".into());
+        return Err(crate::i18n::text("Aktiviere Systemton oder Mikrofon für den Audio-Test.", "Enable system audio or microphone for the audio test.").into());
     }
     let workspace = Snapshot::new(root, &[])?;
     let path = workspace.dir.join("audio-test.wav");
@@ -37,18 +37,18 @@ pub fn record(
     );
     let inputs = pipes.iter().map(|p| p.input.clone()).collect::<Vec<_>>();
     let mut cmd = mix_command(ffmpeg, &inputs, &path);
-    let result = control.run(&mut cmd, 10.0, "Audio-Test läuft");
+    let result = control.run(&mut cmd, 10.0, crate::i18n::text("Audio-Test läuft", "Audio test running"));
     drop(pipes); // FFmpeg has exited, so pipe writes can finish before joining WASAPI threads.
     let output = result?;
     if !output.status.success() {
-        return Err(format!(
-            "Audio-Test fehlgeschlagen: {}",
+        return Err(crate::tr_format!(
+            "Audio-Test fehlgeschlagen: {}", "Audio test failed: {}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }
     let info = crate::recorder::probe_media(ffmpeg, &path)?;
     if !info.audio || info.duration < 9.5 {
-        return Err("Der Audio-Test wurde vorzeitig beendet. Prüfe das Audiogerät.".into());
+        return Err(crate::i18n::text("Der Audio-Test wurde vorzeitig beendet. Prüfe das Audiogerät.", "The audio test ended early. Check your audio device.").into());
     }
     control.check()?;
     Ok(Preview {

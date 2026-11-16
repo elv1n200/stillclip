@@ -84,7 +84,7 @@ fn data_object(path: &Path) -> windows::core::Result<IDataObject> {
 
 pub fn file(path: &Path, control: Control) -> Result<(), String> {
     if !path.is_file() {
-        return Err("Der Clip existiert nicht mehr.".into());
+        return Err(crate::i18n::text("Der Clip existiert nicht mehr.", "The clip no longer exists.").into());
     }
     unsafe { OleInitialize(None) }.map_err(|e| e.to_string())?;
     let _apartment = Apartment;
@@ -96,7 +96,7 @@ pub fn file(path: &Path, control: Control) -> Result<(), String> {
     if control.cancel.load(Ordering::SeqCst) {
         return Ok(());
     }
-    let data = data_object(path).map_err(|e| format!("Datei konnte nicht gezogen werden: {e}"))?;
+    let data = data_object(path).map_err(|e| crate::tr_format!("Datei konnte nicht gezogen werden: {e}", "Could not drag file: {e}"))?;
     let source: IDropSource = Source {
         cancel: control.cancel,
     }

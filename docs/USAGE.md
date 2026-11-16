@@ -2,6 +2,12 @@
 
 [Zur Projektübersicht](../README.md) · [Windows-Prüfung](../WINDOWS-CHECKS.md)
 
+## Sprache und Installation
+
+Unter **Einstellungen → Oberfläche → Sprache** zwischen Deutsch und English wechseln. Die Auswahl wird sofort gespeichert, auch während einer Aufnahme. Andere noch nicht gespeicherte Einstellungen bleiben unverändert.
+
+Es gibt einen kleinen Online-Installer und einen vollständigen Offline-Installer. Beide richten FFmpeg und bei Bedarf Microsoft WebView2 ein. Aufnahmen liegen nach der Installation standardmäßig in **Videos/Stillclip**, Einstellungen unter `%LOCALAPPDATA%\Stillclip\settings`. Updates und Deinstallation behalten beide. Die portable ZIP verwendet weiterhin `clips/` und `settings/` neben der EXE. [Installationsdetails (Englisch)](INSTALLATION.md).
+
 ## Funktionen
 
 - **Exportliste.** Bis zu zwölf Schnitte oder Highlight-Exporte einreihen,

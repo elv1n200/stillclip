@@ -65,7 +65,7 @@ mkdir -p "$work/build-ffmpeg"
     --disable-shared --enable-static --disable-debug --disable-doc --disable-ffplay \
     --extra-cflags="-I$prefix/include" --extra-cxxflags="-I$prefix/include" \
     --extra-ldflags="-L$prefix/lib -static -static-libgcc -static-libstdc++" \
-    --pkg-config-flags=--static
+    --extra-libs="-lstdc++" --pkg-config-flags=--static
   make -j"$jobs"
   make install
 )

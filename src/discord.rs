@@ -33,7 +33,7 @@ impl Profile {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Free => "Discord ohne Nitro (20 MB)",
+            Self::Free => crate::i18n::text("Discord ohne Nitro (20 MB)", "Discord Free (20 MB)"),
             Self::Nitro => "Discord Nitro (1 GB)",
         }
     }
@@ -57,7 +57,7 @@ struct Plan {
 impl Plan {
     fn new(limit: u64, seconds: f64, audio: bool) -> Result<Self, String> {
         if !seconds.is_finite() || seconds <= 0.0 {
-            return Err("Wähle einen gültigen Clipbereich.".into());
+            return Err(crate::i18n::text("Wähle einen gültigen Clipbereich.", "Choose a valid clip range.").into());
         }
         // Leave five percent plus 64 kB for MP4 tables, AAC padding and encoder
         // variance. The final file, not this estimate, decides success.
@@ -68,7 +68,7 @@ impl Plan {
 
     fn with_video_bps(video_bps: u64) -> Result<Self, String> {
         if video_bps < MIN_VIDEO_BPS {
-            return Err("Der Ausschnitt ist für dieses Dateilimit zu lang. Wähle einen kürzeren Bereich oder einen Export ohne Dateilimit.".into());
+            return Err(crate::i18n::text("Der Ausschnitt ist für dieses Dateilimit zu lang. Wähle einen kürzeren Bereich oder einen Export ohne Dateilimit.", "The selection is too long for this file size limit. Choose a shorter range or an export without a size limit.").into());
         }
         let video_bps = video_bps.min(MAX_VIDEO_BPS);
         let (width, height, fps) = match video_bps {
@@ -166,18 +166,18 @@ fn encode_with_limit(
     control.check()?;
     let crop = crop.map(|c| c.validate()).transpose()?;
     if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
-        return Err("Wähle einen gültigen Clipbereich mit Ende nach dem Anfang.".into());
+        return Err(crate::i18n::text("Wähle einen gültigen Clipbereich mit Ende nach dem Anfang.", "Choose a valid clip range with the end after the start.").into());
     }
     if output.exists() {
-        return Err("Die Zieldatei existiert bereits. Wähle einen neuen Dateinamen.".into());
+        return Err(crate::i18n::text("Die Zieldatei existiert bereits. Wähle einen neuen Dateinamen.", "The output file already exists. Choose a different filename.").into());
     }
     let info = recorder::probe_media(ffmpeg, input)?;
     if start >= info.duration || end > info.duration + 0.1 {
-        return Err("Der Clipbereich liegt außerhalb des Videos.".into());
+        return Err(crate::i18n::text("Der Clipbereich liegt außerhalb des Videos.", "The selected range is outside the video.").into());
     }
     let seconds = end.min(info.duration) - start;
     let mut plan = Plan::new(limit, seconds, info.audio)?;
-    let workspace = Snapshot::new(output.parent().ok_or("Exportordner fehlt.")?, &[])?;
+    let workspace = Snapshot::new(output.parent().ok_or(crate::i18n::text("Exportordner fehlt.", "Export folder is missing."))?, &[])?;
     let staged = workspace.dir.join("discord.mp4");
     let passlog = workspace.dir.join("video-pass");
     let threads = std::thread::available_parallelism()
@@ -266,29 +266,29 @@ fn encode_with_limit(
                 &mut encode,
                 seconds,
                 if pass == 1 {
-                    "Discord: Video analysieren"
+                    crate::i18n::text("Discord: Video analysieren", "Discord: analyzing video")
                 } else {
-                    "Discord: Video komprimieren"
+                    crate::i18n::text("Discord: Video komprimieren", "Discord: compressing video")
                 },
             )?;
             if !result.status.success() {
-                return Err(format!(
-                    "Discord-Export fehlgeschlagen. {}",
+                return Err(crate::tr_format!(
+                    "Discord-Export fehlgeschlagen. {}", "Discord export failed. {}",
                     recorder::diagnostic(&result.stderr)
                 ));
             }
         }
 
         let bytes = fs::metadata(&staged)
-            .map_err(|e| format!("Exportdatei fehlt: {e}"))?
+            .map_err(|e| crate::tr_format!("Exportdatei fehlt: {e}", "Export file is missing: {e}"))?
             .len();
         if bytes == 0 {
-            return Err("Der Export hat keine Videodaten erzeugt.".into());
+            return Err(crate::i18n::text("Der Export hat keine Videodaten erzeugt.", "The export produced no video data.").into());
         }
         if bytes < limit {
             let exported = recorder::probe_media(ffmpeg, &staged)?;
             if (exported.duration - seconds).abs() > 0.25 || exported.audio != info.audio {
-                return Err("Der Discord-Export enthält nicht den vollständigen Ausschnitt. Bitte erneut versuchen.".into());
+                return Err(crate::i18n::text("Der Discord-Export enthält nicht den vollständigen Ausschnitt. Bitte erneut versuchen.", "The Discord export does not contain the full selection. Please try again.").into());
             }
             control.check()?;
             workspace.publish(&staged, output)?;
@@ -301,7 +301,7 @@ fn encode_with_limit(
             plan = Plan::with_video_bps(reduced)?;
         }
     }
-    Err("Der Clip passt noch nicht unter das Dateilimit. Wähle einen kürzeren Bereich oder einen Export ohne Dateilimit.".into())
+    Err(crate::i18n::text("Der Clip passt noch nicht unter das Dateilimit. Wähle einen kürzeren Bereich oder einen Export ohne Dateilimit.", "The clip still exceeds the file size limit. Choose a shorter range or an export without a size limit.").into())
 }
 
 #[cfg(test)]

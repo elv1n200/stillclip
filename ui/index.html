@@ -133,6 +133,13 @@
       <section class="settings" id="page-settings" aria-label="Einstellungen" hidden>
         <div class="page-heading"><h1>Einstellungen</h1><p>So, wie du spielst.</p></div>
         <nav class="settings-nav" aria-label="Einstellungsbereiche"></nav>
+        <div class="settings-card">
+          <div class="settings-card-heading"><div><h2>Oberfläche</h2><p>Sprache der App.</p></div></div>
+          <div class="settings-body"><div class="setting-row">
+            <div><label class="setting-label" for="setting-language">Sprache</label><div class="setting-help">Wird sofort gespeichert. Ein Neustart ist nicht nötig.</div></div>
+            <select id="setting-language" aria-label="Sprache"><option value="de">Deutsch</option><option value="en">English</option></select>
+          </div></div>
+        </div>
         <p class="settings-locked" id="settings-locked" hidden>Die Aufnahme läuft. Beende sie, um Bild, Ton oder Puffer zu ändern. Tastenkürzel und Verhalten bleiben anpassbar.</p>
 
         <div class="settings-card">
@@ -378,6 +385,7 @@
   </div>
 
   <div class="toasts" id="toasts" aria-live="polite"></div>
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

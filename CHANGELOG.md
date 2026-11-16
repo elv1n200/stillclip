@@ -1,4 +1,13 @@
-# Versionshinweise
+# Changelog
+
+## 0.7.0 · 16 November 2026
+
+- Switch between English and German instantly in Settings. The choice persists and also applies to native menus, dialogs, and app-owned errors.
+- Choose a compact online installer or a complete offline installer, with Start menu integration and normal Windows uninstall.
+- Both installers include verified FFmpeg tools and automatically install Microsoft WebView2 when needed. The portable ZIP now includes FFmpeg too.
+- Installed settings and recordings live outside the application directory and survive updates and uninstall. Existing portable layouts remain compatible.
+- Windows executable icon and version metadata; no separate Visual C++ runtime installation required.
+- Pinned media sources, corresponding-source download, component checksums, and automated installation/upgrade/uninstall checks.
 
 ## 0.6.0 · 16. November 2026
 

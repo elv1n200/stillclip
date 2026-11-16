@@ -41,15 +41,15 @@ pub fn export_controlled(
 ) -> Result<Vec<f64>, String> {
     control.check()?;
     if portrait_width.is_some_and(|w| ![720, 1080].contains(&w)) {
-        return Err("Ungültiges Hochkantformat.".into());
+        return Err(crate::i18n::text("Ungültiges Hochkantformat.", "Invalid portrait format.").into());
     }
     if pieces.is_empty() || pieces.len() > MAX_PIECES {
-        return Err(format!(
-            "Wähle zwischen einem und {MAX_PIECES} Ausschnitten."
+        return Err(crate::tr_format!(
+            "Wähle zwischen einem und {MAX_PIECES} Ausschnitten.", "Choose between one and {MAX_PIECES} excerpts."
         ));
     }
     if output.exists() {
-        return Err("Die Zieldatei existiert bereits.".into());
+        return Err(crate::i18n::text("Die Zieldatei existiert bereits.", "The output file already exists.").into());
     }
     // Validate the entire request before doing any expensive work.
     let ranges: Vec<_> = pieces
@@ -61,15 +61,15 @@ pub fn export_controlled(
             }
             let info = recorder::probe_media(ffmpeg, &piece.path)?;
             let (start, end) = mechanics::editor_range(piece.start, piece.end, info.duration)
-                .ok_or("Ein Highlight-Ausschnitt ist ungültig oder zu kurz.")?;
+                .ok_or(crate::i18n::text("Ein Highlight-Ausschnitt ist ungültig oder zu kurz.", "A highlight excerpt is invalid or too short."))?;
             Ok((start, end, info.audio))
         })
         .collect::<Result<_, String>>()?;
     let total: f64 = ranges.iter().map(|(s, e, _)| e - s).sum();
     if total > 1800.0 {
-        return Err("Ein Highlight darf höchstens 30 Minuten lang sein.".into());
+        return Err(crate::i18n::text("Ein Highlight darf höchstens 30 Minuten lang sein.", "A highlight must be no longer than 30 minutes.").into());
     }
-    let workspace = Snapshot::new(output.parent().ok_or("Exportordner fehlt.")?, &[])?;
+    let workspace = Snapshot::new(output.parent().ok_or(crate::i18n::text("Exportordner fehlt.", "Export folder is missing."))?, &[])?;
     let mut concat = String::from("ffconcat version 1.0\n");
     let mut markers = Vec::new();
     let mut offset = 0.0;
@@ -150,15 +150,15 @@ pub fn export_controlled(
                 &format!("Ausschnitt {} / {}", index + 1, pieces.len()),
             )?;
         if !result.status.success() {
-            return Err(format!(
-                "Ausschnitt {} konnte nicht exportiert werden: {}",
+            return Err(crate::tr_format!(
+                "Ausschnitt {} konnte nicht exportiert werden: {}", "Could not export excerpt {}: {}",
                 index + 1,
                 recorder::diagnostic(&result.stderr)
             ));
         }
         let length = recorder::probe_duration(ffmpeg, &part)?;
         if (length - (end - start)).abs() > 0.25 {
-            return Err("Ein Highlight-Ausschnitt wurde nicht vollständig exportiert.".into());
+            return Err(crate::i18n::text("Ein Highlight-Ausschnitt wurde nicht vollständig exportiert.", "A highlight excerpt was not exported in full.").into());
         }
         markers.extend(
             piece
@@ -201,16 +201,16 @@ pub fn export_controlled(
     .arg(&joined);
     let result = control
         .part(0.8, 0.05)
-        .run(&mut join, offset, "Ausschnitte verbinden")?;
+        .run(&mut join, offset, crate::i18n::text("Ausschnitte verbinden", "Joining excerpts"))?;
     if !result.status.success() {
-        return Err(format!(
-            "Highlights konnten nicht verbunden werden: {}",
+        return Err(crate::tr_format!(
+            "Highlights konnten nicht verbunden werden: {}", "Could not join highlights: {}",
             recorder::diagnostic(&result.stderr)
         ));
     }
     let duration = recorder::probe_duration(ffmpeg, &joined)?;
     if (duration - offset).abs() > 0.5 {
-        return Err("Der Highlight-Clip ist unvollständig.".into());
+        return Err(crate::i18n::text("Der Highlight-Clip ist unvollständig.", "The highlight clip is incomplete.").into());
     }
     let staged = if let Some(profile) = profile {
         let compressed = workspace.dir.join("discord-highlight.mp4");

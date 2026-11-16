@@ -93,9 +93,9 @@ impl Control {
         command.args(["-nostats", "-stats_period", "0.25", "-progress", "pipe:1"]);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let (mut child, group) = crate::process_tree::spawn(command)
-            .map_err(|e| format!("FFmpeg konnte nicht gestartet werden: {e}"))?;
-        let stdout = child.stdout.take().ok_or("FFmpeg-Fortschritt fehlt.")?;
-        let stderr = child.stderr.take().ok_or("FFmpeg-Protokoll fehlt.")?;
+            .map_err(|e| crate::tr_format!("FFmpeg konnte nicht gestartet werden: {e}", "Could not start FFmpeg: {e}"))?;
+        let stdout = child.stdout.take().ok_or(crate::i18n::text("FFmpeg-Fortschritt fehlt.", "FFmpeg progress is unavailable."))?;
+        let stderr = child.stderr.take().ok_or(crate::i18n::text("FFmpeg-Protokoll fehlt.", "FFmpeg log is unavailable."))?;
         let meter = self.clone();
         let label = phase.to_owned();
         let reader = std::thread::spawn(move || {
@@ -190,8 +190,8 @@ pub struct Queue {
 impl Queue {
     pub fn push(&mut self, label: String, sources: Vec<PathBuf>, work: Work) -> Result<(), String> {
         if self.pending.len() + usize::from(self.active.is_some()) >= LIMIT {
-            return Err(format!(
-                "Die Exportliste ist voll (höchstens {LIMIT} Aufträge)."
+            return Err(crate::tr_format!(
+                "Die Exportliste ist voll (höchstens {LIMIT} Aufträge).", "The export queue is full (maximum {LIMIT} jobs)."
             ));
         }
         self.next += 1;
@@ -270,7 +270,7 @@ impl Queue {
             label: p.label.clone(),
             running: false,
             percent: 0,
-            phase: "Wartet".into(),
+            phase: crate::i18n::text("Wartet", "Queued").into(),
             eta_seconds: None,
             cancelling: false,
         }));

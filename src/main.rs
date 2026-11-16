@@ -12,6 +12,7 @@ mod encoding;
 mod export;
 mod games;
 mod highlights;
+mod i18n;
 mod icon;
 mod jobs;
 mod library;
@@ -177,10 +178,9 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let config = std::env::var_os("STILLCLIP_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(settings::default_config_dir);
+        let config = settings::config_dir();
         let mut settings = settings::load_settings(&config);
+        i18n::set_language(settings.language);
         if std::env::var_os("STILLCLIP_DATA_DIR").is_some()
             && !config.join("settings.json").exists()
         {
@@ -355,7 +355,7 @@ impl App {
         if count == 0 {
             if failed > 0 {
                 self.notify(
-                    "Einige Clips konnten nicht gelöscht werden. Sie bleiben in der Bibliothek.",
+                    crate::i18n::text("Einige Clips konnten nicht gelöscht werden. Sie bleiben in der Bibliothek.", "Some clips could not be deleted. They remain in the library."),
                     true,
                     None,
                 );
@@ -363,20 +363,20 @@ impl App {
             return;
         }
         let text = if count == 1 {
-            format!(
-                "Der älteste Clip wurde gelöscht, damit der Ordner unter {} GB bleibt ({} frei).",
+            crate::tr_format!(
+                "Der älteste Clip wurde gelöscht, damit der Ordner unter {} GB bleibt ({} frei).", "Deleted the oldest clip to keep the folder under {} GB ({} free).",
                 self.settings.storage_limit_gb,
                 recorder::format_bytes(freed)
             )
         } else {
-            format!(
-                "{count} alte Clips wurden gelöscht, damit der Ordner unter {} GB bleibt ({} frei).",
+            crate::tr_format!(
+                "{count} alte Clips wurden gelöscht, damit der Ordner unter {} GB bleibt ({} frei).", "Deleted {count} old clips to keep the folder under {} GB ({} free).",
                 self.settings.storage_limit_gb,
                 recorder::format_bytes(freed)
             )
         };
         let text = if failed > 0 {
-            format!("{text} {failed} Clips konnten nicht gelöscht werden und bleiben erhalten.")
+            crate::tr_format!("{text} {failed} Clips konnten nicht gelöscht werden und bleiben erhalten.", "{text} Could not delete {failed} clips; they have been kept.")
         } else {
             text
         };
@@ -705,12 +705,12 @@ impl App {
     fn clip_path(&self, command: &Value) -> Result<PathBuf, String> {
         let id = command["id"]
             .as_u64()
-            .ok_or("Bitte einen Clip auswählen.")?;
+            .ok_or(crate::i18n::text("Bitte einen Clip auswählen.", "Please select a clip."))?;
         self.clips
             .iter()
             .find(|(key, _)| *key == id)
             .map(|(_, c)| c.path.clone())
-            .ok_or_else(|| "Der Clip ist nicht mehr in der Bibliothek. Bitte aktualisieren.".into())
+            .ok_or_else(|| crate::i18n::text("Der Clip ist nicht mehr in der Bibliothek. Bitte aktualisieren.", "This clip is no longer in the library. Please refresh.").into())
     }
 
     fn session_config(&mut self) -> Result<SessionConfig, String> {
@@ -723,17 +723,17 @@ impl App {
         let mut display = self
             .capture_display()
             .cloned()
-            .ok_or("Es wurde kein Bildschirm gefunden.")?;
+            .ok_or(crate::i18n::text("Es wurde kein Bildschirm gefunden.", "No display was found."))?;
         let target = if settings.capture_window || (settings.system_audio && settings.game_audio) {
             Some(games::visible_apps().into_iter().find(|app| self.active_game.as_ref().map_or(app.exe == settings.target_exe, |game| game.matches(app)))
-                .ok_or("Starte das Spiel oder wähle unter Aufnahme ein laufendes Zielprogramm aus.")?)
+                .ok_or(crate::i18n::text("Starte das Spiel oder wähle unter Aufnahme ein laufendes Zielprogramm aus.", "Start the game or select a running target program under Recording."))?)
         } else {
             None
         };
         if settings.capture_window {
-            let window = target.as_ref().ok_or("Kein Aufnahmefenster gewählt.")?;
+            let window = target.as_ref().ok_or(crate::i18n::text("Kein Aufnahmefenster gewählt.", "No capture window selected."))?;
             let (w, h) = games::window_size(window.hwnd, window.pid)
-                .ok_or("Das Aufnahmefenster ist geschlossen oder minimiert.")?;
+                .ok_or(crate::i18n::text("Das Aufnahmefenster ist geschlossen oder minimiert.", "The capture window is closed or minimized."))?;
             display.width = w;
             display.height = h;
         }
@@ -768,7 +768,7 @@ impl App {
 
     fn recording_job(&mut self, action: &str, proxy: EventLoopProxy<AppEvent>) {
         if action == "start" && self.audio_test.active.is_some() {
-            self.message(Err("Beende zuerst den Audio-Test.".into()));
+            self.message(Err(crate::i18n::text("Beende zuerst den Audio-Test.", "Stop the audio test first.").into()));
             return;
         }
         if matches!(action, "start" | "stop") {
@@ -788,7 +788,7 @@ impl App {
         let export = self
             .recorder
             .as_mut()
-            .ok_or_else(|| "Bitte zuerst FFmpeg auswählen.".to_string())
+            .ok_or_else(|| crate::i18n::text("Bitte zuerst FFmpeg auswählen.", "Please select FFmpeg first.").to_string())
             .and_then(|recorder| recorder.prepare_replay(seconds, &prefix));
         let export = match export {
             Ok(export) => export,
@@ -799,7 +799,7 @@ impl App {
         };
         let marks: Vec<f64> = self.markers.iter().map(|marker| marker.at).collect();
         let events = proxy.clone();
-        self.file_job(proxy, "Moment wird gesichert…", move || {
+        self.file_job(proxy, crate::i18n::text("Moment wird gesichert…", "Saving replay…"), move || {
             export.run().map(|saved| {
                 send_markers(
                     &events,
@@ -809,7 +809,7 @@ impl App {
                     f64::from(seconds),
                 );
                 JobOutcome {
-                    message: "Moment gesichert.".into(),
+                    message: crate::i18n::text("Moment gesichert.", "Replay saved.").into(),
                     saved: Some(saved.path),
                     session: None,
                     replay: true,
@@ -822,7 +822,7 @@ impl App {
     /// starting is retained; probing also cannot resurrect a cancelled start.
     fn advance_capture(&mut self, proxy: EventLoopProxy<AppEvent>) {
         if self.capture.wants_start() && !self.capabilities.probed && self.ffmpeg.is_some() {
-            self.status = "FFmpeg wird geprüft, die Aufnahme startet gleich…".into();
+            self.status = crate::i18n::text("FFmpeg wird geprüft, die Aufnahme startet gleich…", "Checking FFmpeg. Recording will start shortly…").into();
             return;
         }
         let Some(start) = self.capture.next(self.recording) else {
@@ -841,7 +841,7 @@ impl App {
         };
         let Some(mut recorder) = self.recorder.take() else {
             self.message(Err(
-                "Bitte zuerst FFmpeg in den Einstellungen auswählen.".into()
+                crate::i18n::text("Bitte zuerst FFmpeg in den Einstellungen auswählen.", "Please select FFmpeg in Settings first.").into()
             ));
             return;
         };
@@ -852,9 +852,9 @@ impl App {
         self.capture.transitioning = true;
         self.error = false;
         self.status = if start {
-            "Aufnahme wird gestartet…"
+            crate::i18n::text("Aufnahme wird gestartet…", "Starting recording…")
         } else {
-            "Aufnahme wird beendet…"
+            crate::i18n::text("Aufnahme wird beendet…", "Stopping recording…")
         }
         .into();
         let marks: Vec<f64> = self.markers.iter().map(|marker| marker.at).collect();
@@ -862,7 +862,7 @@ impl App {
         std::thread::spawn(move || {
             let result = if let Some(config) = config {
                 recorder.start(config).map(|info| JobOutcome {
-                    message: format!("Aufnahme läuft über {}.", info.strategy),
+                    message: crate::tr_format!("Aufnahme läuft über {}.", "Recording with {}.", info.strategy),
                     saved: None,
                     session: Some(info),
                     replay: false,
@@ -874,9 +874,9 @@ impl App {
                     }
                     JobOutcome {
                         message: if saved.is_some() {
-                            "Aufnahme beendet und gespeichert."
+                            crate::i18n::text("Aufnahme beendet und gespeichert.", "Recording stopped and saved.")
                         } else {
-                            "Aufnahme beendet."
+                            crate::i18n::text("Aufnahme beendet.", "Recording stopped.")
                         }
                         .into(),
                         saved,
@@ -898,13 +898,13 @@ impl App {
     fn mark(&mut self) {
         let Some(recorder) = self.recorder.as_ref() else {
             self.message(Err(
-                "Bitte zuerst FFmpeg in den Einstellungen auswählen.".into()
+                crate::i18n::text("Bitte zuerst FFmpeg in den Einstellungen auswählen.", "Please select FFmpeg in Settings first.").into()
             ));
             return;
         };
         if !recorder.is_recording() {
             self.notify(
-                "Es läuft keine Aufnahme. Starte zuerst die Aufnahme.",
+                crate::i18n::text("Es läuft keine Aufnahme. Starte zuerst die Aufnahme.", "No recording is running. Start recording first."),
                 true,
                 None,
             );
@@ -920,11 +920,11 @@ impl App {
         });
         let after = self.settings.marker_after;
         let text = if after > 0 {
-            format!("Markierung gesetzt. In {after} Sekunden ist der Moment vollständig.")
+            crate::tr_format!("Markierung gesetzt. In {after} Sekunden ist der Moment vollständig.", "Marker added. The moment will be complete in {after} seconds.")
         } else {
-            "Markierung gesetzt.".into()
+            crate::i18n::text("Markierung gesetzt.", "Marker added.").into()
         };
-        self.banner("Markierung gesetzt", false);
+        self.banner(crate::i18n::text("Markierung gesetzt", "Marker added"), false);
         self.notify(&text, false, None);
         self.status = text;
         self.error = false;
@@ -957,7 +957,7 @@ impl App {
     /// Writes the clip around a marked moment.
     fn marker_job(&mut self, id: u64, proxy: EventLoopProxy<AppEvent>) {
         let Some(marker) = self.markers.iter().find(|m| m.id == id).cloned() else {
-            self.message(Err("Die Markierung gibt es nicht mehr.".into()));
+            self.message(Err(crate::i18n::text("Die Markierung gibt es nicht mehr.", "This marker no longer exists.").into()));
             return;
         };
         let before = f64::from(self.settings.marker_before);
@@ -965,7 +965,7 @@ impl App {
         let export = self
             .recorder
             .as_mut()
-            .ok_or_else(|| "Bitte zuerst FFmpeg auswählen.".to_string())
+            .ok_or_else(|| crate::i18n::text("Bitte zuerst FFmpeg auswählen.", "Please select FFmpeg first.").to_string())
             .and_then(|recorder| recorder.prepare_marker(marker.at, before, after, &marker.prefix));
         let export = match export {
             Ok(export) => export,
@@ -977,11 +977,11 @@ impl App {
         self.pending_marker = Some(id);
         let marks: Vec<f64> = self.markers.iter().map(|marker| marker.at).collect();
         let events = proxy.clone();
-        self.file_job(proxy, "Markierter Moment wird gesichert…", move || {
+        self.file_job(proxy, crate::i18n::text("Markierter Moment wird gesichert…", "Saving marked moment…"), move || {
             export.run().map(|saved| {
                 send_markers(&events, &saved.path, &marks, saved.start, before + after);
                 JobOutcome {
-                    message: "Markierter Moment gesichert.".into(),
+                    message: crate::i18n::text("Markierter Moment gesichert.", "Marked moment saved.").into(),
                     saved: Some(saved.path),
                     session: None,
                     replay: true,
@@ -996,7 +996,7 @@ impl App {
         self.message(Err(issue.message.clone()));
         self.notify(&issue.message, true, None);
         if issue.stop_requested {
-            self.banner("Aufnahme wird beendet", true);
+            self.banner(crate::i18n::text("Aufnahme wird beendet", "Stopping recording"), true);
             if self.recording {
                 self.auto_started = false;
                 self.recording_job("stop", proxy);
@@ -1012,14 +1012,14 @@ impl App {
             .retain(|at| now.duration_since(*at) < RESTART_WINDOW);
         if self.restarts.len() >= MAX_RESTARTS {
             self.notify(
-                "Die Aufnahme ist mehrfach abgebrochen und wird nicht weiter neu gestartet.",
+                crate::i18n::text("Die Aufnahme ist mehrfach abgebrochen und wird nicht weiter neu gestartet.", "Recording has stopped unexpectedly several times. Automatic restarts are paused."),
                 true,
                 None,
             );
             return;
         }
         self.restarts.push(now);
-        self.notify("Die Aufnahme wird automatisch neu gestartet.", false, None);
+        self.notify(crate::i18n::text("Die Aufnahme wird automatisch neu gestartet.", "Recording is restarting automatically."), false, None);
         self.recording_job("start", proxy);
     }
 
@@ -1055,14 +1055,14 @@ impl App {
         proxy: EventLoopProxy<AppEvent>,
     ) -> Result<(), String> {
         if self.audio_test.active.is_some() || self.recording || self.capture.transitioning {
-            return Err("Beende zuerst die Aufnahme oder den laufenden Audio-Test.".into());
+            return Err(crate::i18n::text("Beende zuerst die Aufnahme oder den laufenden Audio-Test.", "Stop the recording or running audio test first.").into());
         }
         let ffmpeg = self
             .ffmpeg
             .clone()
-            .ok_or("Bitte zuerst FFmpeg auswählen.")?;
+            .ok_or(crate::i18n::text("Bitte zuerst FFmpeg auswählen.", "Please select FFmpeg first."))?;
         let mut prefs: Settings = serde_json::from_value(command["settings"].clone())
-            .map_err(|e| format!("Ungültige Audio-Einstellungen: {e}"))?;
+            .map_err(|e| crate::tr_format!("Ungültige Audio-Einstellungen: {e}", "Invalid audio settings: {e}"))?;
         prefs = prefs.sanitized();
         let exe = self
             .active_game
@@ -1080,7 +1080,7 @@ impl App {
                             .as_ref()
                             .map_or(app.exe == prefs.target_exe, |game| game.matches(app))
                     })
-                    .ok_or("Starte das Zielspiel für den Spielton-Test.")?;
+                    .ok_or(crate::i18n::text("Starte das Zielspiel für den Spielton-Test.", "Start the target game to test game audio."))?;
                 audio::AudioSource::Process { pid: target.pid }
             } else {
                 audio::AudioSource::Loopback
@@ -1096,7 +1096,7 @@ impl App {
             ));
         }
         if sources.is_empty() {
-            return Err("Aktiviere Systemton oder Mikrofon für den Audio-Test.".into());
+            return Err(crate::i18n::text("Aktiviere Systemton oder Mikrofon für den Audio-Test.", "Enable system audio or microphone for the audio test.").into());
         }
         self.audio_test.id += 1;
         let id = self.audio_test.id;
@@ -1114,7 +1114,7 @@ impl App {
                     let _ = proxy.send_event(AppEvent::AudioMeters(id, meters));
                 })
             }))
-            .unwrap_or_else(|_| Err("Der Audio-Test wurde unerwartet beendet.".into()));
+            .unwrap_or_else(|_| Err(crate::i18n::text("Der Audio-Test wurde unerwartet beendet.", "The audio test stopped unexpectedly.").into()));
             let _ = proxy.send_event(AppEvent::AudioFinished(id, result));
         });
         Ok(())
@@ -1129,7 +1129,7 @@ impl App {
     ) {
         match self.exports.push(label, sources, task) {
             Ok(()) => {
-                self.message(Ok("Export zur Warteschlange hinzugefügt.".into()));
+                self.message(Ok(crate::i18n::text("Export zur Warteschlange hinzugefügt.", "Export added to the queue.").into()));
                 self.start_exports(proxy);
             }
             Err(error) => self.message(Err(error)),
@@ -1147,9 +1147,9 @@ impl App {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 (job.work)(control.clone())
             }))
-            .unwrap_or_else(|_| Err("Der Export wurde unerwartet beendet.".into()));
+            .unwrap_or_else(|_| Err(crate::i18n::text("Der Export wurde unerwartet beendet.", "The export stopped unexpectedly.").into()));
             if result.is_ok() {
-                control.progress(1.0, "Gespeichert");
+                control.progress(1.0, crate::i18n::text("Gespeichert", "Saved"));
             }
             let _ = proxy.send_event(AppEvent::ExportFinished(job.id, result));
         });
@@ -1171,6 +1171,7 @@ impl App {
             }
             Err(error) => {
                 let cancelled = error == jobs::CANCELLED;
+                let error = if cancelled { i18n::text(jobs::CANCELLED, "Export cancelled.").to_owned() } else { error };
                 self.message(if cancelled {
                     Ok(error.clone())
                 } else {
@@ -1212,7 +1213,7 @@ impl App {
         let mut settings: Settings = match serde_json::from_value(command["settings"].clone()) {
             Ok(settings) => settings,
             Err(error) => {
-                self.message(Err(format!("Die Einstellungen sind ungültig: {error}")));
+                self.message(Err(crate::tr_format!("Die Einstellungen sind ungültig: {error}", "Invalid settings: {error}")));
                 return;
             }
         };
@@ -1222,14 +1223,14 @@ impl App {
         let settings = settings.sanitized();
         if !self.exports.is_empty() && settings.clips_dir != self.settings.clips_dir {
             self.message(Err(
-                "Beende zuerst die Exportliste, bevor du den Clip-Ordner änderst.".into(),
+                crate::i18n::text("Beende zuerst die Exportliste, bevor du den Clip-Ordner änderst.", "Finish the export queue before changing the clips folder.").into(),
             ));
             return;
         }
         let restricted = self.recording && self.settings.capture_changed(&settings);
         if restricted {
             self.message(Err(
-                "Aufnahme-Einstellungen gelten erst nach dem Beenden der laufenden Aufnahme. Bitte zuerst die Aufnahme beenden.".into(),
+                crate::i18n::text("Aufnahme-Einstellungen gelten erst nach dem Beenden der laufenden Aufnahme. Bitte zuerst die Aufnahme beenden.", "Recording settings can only change after the current recording stops. Stop recording first.").into(),
             ));
             return;
         }
@@ -1253,11 +1254,12 @@ impl App {
                 let folder_changed = settings.clips_dir != self.settings.clips_dir;
                 let limit_changed = settings.storage_limit_gb != self.settings.storage_limit_gb;
                 self.settings = settings;
+                i18n::set_language(self.settings.language);
                 if hotkeys_changed {
                     self.apply_hotkeys();
                 }
                 self.apply_games();
-                self.message(Ok("Einstellungen gespeichert.".into()));
+                self.message(Ok(crate::i18n::text("Einstellungen gespeichert.", "Settings saved.").into()));
                 if folder_changed || limit_changed {
                     self.refresh();
                 }
@@ -1268,6 +1270,23 @@ impl App {
 
     fn action(&mut self, command: Value, hwnd: isize, proxy: EventLoopProxy<AppEvent>) {
         let action = command["action"].as_str().unwrap_or("");
+        if action == "set_language" && !self.closing {
+            if let Some(language) = command["language"].as_str().and_then(i18n::Language::parse) {
+                let mut next = self.settings.clone();
+                next.language = language;
+                match settings::save_settings(&self.config, &next) {
+                    Ok(()) => {
+                        self.settings = next;
+                        i18n::set_language(language);
+                        self.displays = capture::displays();
+                        self.update_tray();
+                        self.message(Ok(i18n::text("Sprache gespeichert.", "Language saved.").into()));
+                    }
+                    Err(error) => self.message(Err(error)),
+                }
+            }
+            return;
+        }
         if action == "cancel_export" {
             if let Some(id) = command["id"].as_u64() {
                 self.exports.cancel(id);
@@ -1305,7 +1324,7 @@ impl App {
             _ => {}
         }
         if self.busy || self.capture.transitioning {
-            self.message(Err("Einen Moment, der letzte Vorgang läuft noch.".into()));
+            self.message(Err(crate::i18n::text("Einen Moment, der letzte Vorgang läuft noch.", "Please wait; the previous operation is still running.").into()));
             return;
         }
         if matches!(action, "rename" | "delete")
@@ -1314,7 +1333,7 @@ impl App {
                 .ok()
                 .is_some_and(|path| self.clip_locked(&path))
         {
-            self.message(Err("Dieser Clip wird noch für einen Export benötigt. Beende oder entferne den Auftrag zuerst.".into()));
+            self.message(Err(crate::i18n::text("Dieser Clip wird noch für einen Export benötigt. Beende oder entferne den Auftrag zuerst.", "This clip is needed for an export. Finish or remove that job first.").into()));
             return;
         }
         if matches!(action, "choose_folder" | "choose_ffmpeg")
@@ -1322,7 +1341,7 @@ impl App {
                 || self.audio_test.active.is_some()
                 || self.dragging.is_some())
         {
-            self.message(Err("Beende zuerst die Exportliste.".into()));
+            self.message(Err(crate::i18n::text("Beende zuerst die Exportliste.", "Finish the export queue first.").into()));
             return;
         }
         match action {
@@ -1351,9 +1370,9 @@ impl App {
                 let result = self.clip_path(&command).and_then(|path| {
                     let tags = command["tags"]
                         .as_array()
-                        .ok_or("Tags fehlen.")?
+                        .ok_or(crate::i18n::text("Tags fehlen.", "Tags are missing."))?
                         .iter()
-                        .map(|t| t.as_str().map(str::to_owned).ok_or("Ungültiger Tag."))
+                        .map(|t| t.as_str().map(str::to_owned).ok_or(crate::i18n::text("Ungültiger Tag.", "Invalid tag.")))
                         .collect::<Result<Vec<_>, _>>()?;
                     let value = library::Annotation::normalized(
                         command["game"].as_str().unwrap_or(""),
@@ -1362,7 +1381,7 @@ impl App {
                     self.index
                         .annotate(library::index_key(&path), value, &self.config)
                 });
-                self.message(result.map(|_| "Spiel und Tags gespeichert.".into()));
+                self.message(result.map(|_| crate::i18n::text("Spiel und Tags gespeichert.", "Game and tags saved.").into()));
             }
             "refresh" => self.refresh(),
             "rescan" => {
@@ -1381,7 +1400,7 @@ impl App {
             "drop_marker" => {
                 if let Some(id) = command["id"].as_u64() {
                     self.markers.retain(|marker| marker.id != id);
-                    self.message(Ok("Markierung verworfen.".into()));
+                    self.message(Ok(crate::i18n::text("Markierung verworfen.", "Marker discarded.").into()));
                 }
             }
             "toggle" => {
@@ -1391,9 +1410,9 @@ impl App {
             "import" => {
                 if let Some(source) = platform::pick_file(hwnd, false) {
                     let dir = self.settings.clips_dir.clone();
-                    self.file_job(proxy, "Clip wird importiert…", move || {
+                    self.file_job(proxy, crate::i18n::text("Clip wird importiert…", "Importing clip…"), move || {
                         library::import_clip(&source, &dir).map(|path| JobOutcome {
-                            message: "Clip importiert.".into(),
+                            message: crate::i18n::text("Clip importiert.", "Clip imported.").into(),
                             saved: Some(path),
                             session: None,
                             replay: false,
@@ -1417,7 +1436,7 @@ impl App {
                         Ok(()) => {
                             self.settings = settings;
                             self.message(Ok(
-                                "Clip-Ordner geändert. Bisherige Clips bleiben im alten Ordner."
+                                crate::i18n::text("Clip-Ordner geändert. Bisherige Clips bleiben im alten Ordner.", "Clips folder changed. Existing clips stay in the previous folder.")
                                     .into(),
                             ));
                             self.refresh();
@@ -1441,7 +1460,7 @@ impl App {
                             self.capabilities = Capabilities::default();
                             self.probe_capabilities(proxy);
                             self.message(Ok(
-                                "FFmpeg-Pfad gespeichert. Encoder werden geprüft…".into()
+                                crate::i18n::text("FFmpeg-Pfad gespeichert. Encoder werden geprüft…", "FFmpeg path saved. Checking encoders…").into()
                             ));
                             self.refresh();
                         }
@@ -1453,7 +1472,7 @@ impl App {
                 if self.ffmpeg.is_some() {
                     self.capabilities = Capabilities::default();
                     self.probe_capabilities(proxy);
-                    self.message(Ok("Encoder werden erneut geprüft…".into()));
+                    self.message(Ok(crate::i18n::text("Encoder werden erneut geprüft…", "Checking encoders again…").into()));
                 }
             }
             "save_settings" => self.save_settings(&command),
@@ -1488,7 +1507,7 @@ impl App {
                     Ok(()) => {
                         self.settings = settings;
                         self.apply_games();
-                        self.message(Ok("Spiel aus der Liste entfernt.".into()));
+                        self.message(Ok(crate::i18n::text("Spiel aus der Liste entfernt.", "Game removed from the list.").into()));
                     }
                     Err(error) => self.message(Err(error)),
                 }
@@ -1500,9 +1519,9 @@ impl App {
                     Ok(path) => {
                         // So the marked moments follow the clip to its new name.
                         self.pending_rename = Some(library::index_key(&path));
-                        self.file_job(proxy, "Clip wird umbenannt…", move || {
+                        self.file_job(proxy, crate::i18n::text("Clip wird umbenannt…", "Renaming clip…"), move || {
                             library::rename_clip(&path, &name).map(|path| JobOutcome {
-                                message: "Clip umbenannt.".into(),
+                                message: crate::i18n::text("Clip umbenannt.", "Clip renamed.").into(),
                                 saved: Some(path),
                                 session: None,
                                 replay: false,
@@ -1515,10 +1534,10 @@ impl App {
             "delete" => match self.clip_path(&command) {
                 Ok(path) => self.file_job(
                     proxy,
-                    "Clip wird in den Papierkorb verschoben…",
+                    crate::i18n::text("Clip wird in den Papierkorb verschoben…", "Moving clip to the Recycle Bin…"),
                     move || {
                         platform::recycle(&path).map(|_| JobOutcome {
-                            message: "Clip in den Papierkorb verschoben.".into(),
+                            message: crate::i18n::text("Clip in den Papierkorb verschoben.", "Clip moved to the Recycle Bin.").into(),
                             saved: None,
                             session: None,
                             replay: false,
@@ -1546,10 +1565,10 @@ impl App {
             "highlights" => {
                 let result = command["pieces"]
                     .as_array()
-                    .ok_or("Wähle zuerst Ausschnitte aus.".to_string())
+                    .ok_or(crate::i18n::text("Wähle zuerst Ausschnitte aus.", "Select excerpts first.").to_string())
                     .and_then(|items| {
                         if items.is_empty() || items.len() > highlights::MAX_PIECES {
-                            return Err("Ein Highlight darf 1 bis 20 Ausschnitte enthalten.".into());
+                            return Err(crate::i18n::text("Ein Highlight darf 1 bis 20 Ausschnitte enthalten.", "A highlight must contain 1 to 20 excerpts.").into());
                         }
                         items
                             .iter()
@@ -1575,7 +1594,7 @@ impl App {
                             Some(1080) => Some(1080),
                             _ if command["portrait_width"].is_null() => None,
                             _ => {
-                                self.message(Err("Ungültiges Hochkantformat.".into()));
+                                self.message(Err(crate::i18n::text("Ungültiges Hochkantformat.", "Invalid portrait format.").into()));
                                 return;
                             }
                         };
@@ -1586,11 +1605,11 @@ impl App {
                             let output = unique_trim_path(&dir, "Highlights", profile.map_or("Mix", |p| p.suffix()));
                             let markers = highlights::export_controlled(&ffmpeg, &pieces, &output, profile, width, &control)?;
                             let _ = events.send_event(AppEvent::ClipMarkers(output.clone(), markers));
-                            Ok(JobOutcome { message: "Highlight-Clip gespeichert. Die Originale bleiben erhalten.".into(), saved: Some(output), session: None, replay: false })
+                            Ok(JobOutcome { message: crate::i18n::text("Highlight-Clip gespeichert. Die Originale bleiben erhalten.", "Highlight saved. The originals stay intact.").into(), saved: Some(output), session: None, replay: false })
                         }), proxy);
                     }
                     (Err(error), _) => self.message(Err(error)),
-                    (_, None) => self.message(Err("Bitte zuerst FFmpeg auswählen.".into())),
+                    (_, None) => self.message(Err(crate::i18n::text("Bitte zuerst FFmpeg auswählen.", "Please select FFmpeg first.").into())),
                 }
             }
             "favorite" => match self.clip_path(&command) {
@@ -1637,9 +1656,9 @@ impl App {
                         stem,
                         profile.map_or(
                             if crop.is_some() {
-                                "Hochkant"
+                                crate::i18n::text("Hochkant", "Portrait")
                             } else {
-                                "Schnitt"
+                                crate::i18n::text("Schnitt", "Trim")
                             },
                             |p| p.label()
                         )
@@ -1647,17 +1666,17 @@ impl App {
                     self.queue_export(label, vec![path.clone()], Box::new(move |control| {
                         control.check()?;
                         let duration = recorder::probe_duration(&ffmpeg, &path)?;
-                        let (start, end) = mechanics::editor_range(start, end, duration).ok_or("Der Ausschnitt muss mindestens zwei Sekunden lang sein und innerhalb des Videos liegen.")?;
-                        let suffix = profile.map_or(if crop.is_some() { "Hochkant" } else { "Schnitt" }, |p| p.suffix());
+                        let (start, end) = mechanics::editor_range(start, end, duration).ok_or(crate::i18n::text("Der Ausschnitt muss mindestens zwei Sekunden lang sein und innerhalb des Videos liegen.", "The selection must be at least two seconds long and within the video."))?;
+                        let suffix = profile.map_or(if crop.is_some() { crate::i18n::text("Hochkant", "Portrait") } else { crate::i18n::text("Schnitt", "Trim") }, |p| p.suffix());
                         let output = unique_trim_path(&dir, &stem, suffix);
                         let workspace = export::Snapshot::new(&dir, &[])?;
                         let staged = workspace.dir.join("clip.mp4");
                         let (from, message) = if let Some(profile) = profile {
                             let bytes = discord::export_controlled(&ffmpeg, &path, &staged, start, end, profile, crop, &control.part(0.0, 0.99))?;
-                            (start, format!("{}: {:.2} MB gespeichert und Dateilimit geprüft.", profile.label(), bytes as f64 / 1_000_000.0))
+                            (start, crate::tr_format!("{}: {:.2} MB gespeichert und Dateilimit geprüft.", "{}: {:.2} MB saved and file size limit verified.", profile.label(), bytes as f64 / 1_000_000.0))
                         } else {
                             let from = recorder::trim_controlled(&ffmpeg, &path, &staged, start, end, mode, crop, &control.part(0.0, 0.99))?;
-                            (from, "Neuer Clip gespeichert. Das Original bleibt erhalten.".into())
+                            (from, crate::i18n::text("Neuer Clip gespeichert. Das Original bleibt erhalten.", "New clip saved. The original stays intact.").into())
                         };
                         control.check()?; workspace.publish(&staged, &output)?;
                         send_markers(&events, &output, &marks, from, end - from);
@@ -1666,10 +1685,10 @@ impl App {
                     }), proxy);
                 }
                 (Err(error), _) => self.message(Err(error)),
-                (_, None) => self.message(Err("Bitte zuerst FFmpeg auswählen.".into())),
+                (_, None) => self.message(Err(crate::i18n::text("Bitte zuerst FFmpeg auswählen.", "Please select FFmpeg first.").into())),
             },
             "choose_folder" | "choose_ffmpeg" => {
-                self.message(Err("Bitte zuerst die laufende Aufnahme beenden.".into()))
+                self.message(Err(crate::i18n::text("Bitte zuerst die laufende Aufnahme beenden.", "Please stop the current recording first.").into()))
             }
             _ => (),
         }
@@ -1677,12 +1696,12 @@ impl App {
 
     fn add_game(&mut self, entry: GameEntry) {
         if !entry.is_valid() {
-            self.message(Err("Bitte ein Programm mit Dateinamen wählen.".into()));
+            self.message(Err(crate::i18n::text("Bitte ein Programm mit Dateinamen wählen.", "Please select a program with a filename.").into()));
             return;
         }
         let mut settings = self.settings.clone();
         if settings.custom_games.iter().any(|g| g.exe == entry.exe) {
-            self.message(Err(format!("{} steht bereits in der Liste.", entry.name)));
+            self.message(Err(crate::tr_format!("{} steht bereits in der Liste.", "{} is already in the list.", entry.name)));
             return;
         }
         let name = entry.name.clone();
@@ -1691,7 +1710,7 @@ impl App {
             Ok(()) => {
                 self.settings = settings;
                 self.apply_games();
-                self.message(Ok(format!("{name} wird jetzt erkannt.")));
+                self.message(Ok(crate::tr_format!("{name} wird jetzt erkannt.", "{name} will now be detected.")));
             }
             Err(error) => self.message(Err(error)),
         }
@@ -1786,14 +1805,14 @@ impl App {
                         .and_then(|p| p.file_stem())
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    self.banner(&format!("Moment gesichert · {name}"), false);
+                    self.banner(&crate::tr_format!("Moment gesichert · {name}", "Replay saved · {name}"), false);
                     if self.settings.clip_sound {
                         overlay::play_chime();
                     }
                 } else if outcome.session.is_some() {
                     let text = match &self.active_game {
-                        Some(game) => format!("Aufnahme läuft · {}", game.name),
-                        None => "Aufnahme läuft".to_owned(),
+                        Some(game) => crate::tr_format!("Aufnahme läuft · {}", "Recording · {}", game.name),
+                        None => crate::i18n::text("Aufnahme läuft", "Recording").to_owned(),
                     };
                     self.banner(&text, false);
                 }
@@ -1805,7 +1824,7 @@ impl App {
                 self.message(Err(error.clone()));
                 self.notify(&error, true, None);
                 if self.recording || self.active_game.is_some() {
-                    self.banner("Stillclip: Vorgang fehlgeschlagen", true);
+                    self.banner(crate::i18n::text("Stillclip: Vorgang fehlgeschlagen", "Stillclip: operation failed"), true);
                 }
             }
         }
@@ -1824,18 +1843,18 @@ impl App {
         if let Some(tray) = &self.tray {
             let tooltip = if self.recording {
                 match &self.active_game {
-                    Some(game) => format!(
-                        "Stillclip · {} · Aufnahme läuft ({})",
+                    Some(game) => crate::tr_format!(
+                        "Stillclip · {} · Aufnahme läuft ({})", "Stillclip · {} · Recording ({})",
                         game.name,
                         self.settings.hotkey_replay.label()
                     ),
-                    None => format!(
-                        "Stillclip · Aufnahme läuft ({})",
+                    None => crate::tr_format!(
+                        "Stillclip · Aufnahme läuft ({})", "Stillclip · Recording ({})",
                         self.settings.hotkey_replay.label()
                     ),
                 }
             } else {
-                "Stillclip · bereit".to_owned()
+                i18n::text("Stillclip · bereit", "Stillclip · ready").to_owned()
             };
             tray.update(self.recording, &tooltip);
         }
@@ -1885,7 +1904,7 @@ fn parse_crop(value: &Value) -> Result<Option<portrait::Crop>, String> {
         return Ok(None);
     }
     let crop: portrait::Crop =
-        serde_json::from_value(value.clone()).map_err(|_| "Ungültiger Hochkant-Ausschnitt.")?;
+        serde_json::from_value(value.clone()).map_err(|_| crate::i18n::text("Ungültiger Hochkant-Ausschnitt.", "Invalid portrait crop."))?;
     crop.validate().map(Some)
 }
 
@@ -1910,6 +1929,7 @@ fn asset(path: &str) -> Option<(&'static [u8], &'static str)> {
             include_bytes!("../ui/app.js"),
             "text/javascript; charset=utf-8",
         ),
+        "/i18n.js" => (include_bytes!("../ui/i18n.js"), "text/javascript; charset=utf-8"),
         _ => return None,
     })
 }
@@ -1926,25 +1946,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if arg == "--screenshot" {
             screenshot_path = Some(PathBuf::from(
                 args.next()
-                    .ok_or("--screenshot benötigt einen PNG-Dateipfad")?,
+                    .ok_or(crate::i18n::text("--screenshot benötigt einen PNG-Dateipfad", "--screenshot requires a PNG file path"))?,
             ));
         } else if arg == "--page" {
             screenshot_page = args
                 .next()
-                .ok_or("--page benötigt einen Namen (library, settings, editor)")?
+                .ok_or(crate::i18n::text("--page benötigt einen Namen (library, settings, editor)", "--page requires a name (library, settings, editor)"))?
                 .to_string_lossy()
                 .into_owned();
         } else if arg == "--minimized" {
             start_hidden = true;
         } else {
-            return Err("Unbekanntes Argument. Unterstützt: --screenshot <file.png> [--page name], --minimized".into());
+            return Err(crate::i18n::text("Unbekanntes Argument. Unterstützt: --screenshot <file.png> [--page name], --minimized", "Unknown argument. Supported: --screenshot <file.png> [--page name], --minimized").into());
         }
     }
     let checking = screenshot_path.is_some();
     if checking {
         std::thread::spawn(|| {
             std::thread::sleep(Duration::from_secs(45));
-            eprintln!("Stillclip: WebView-Fotoprüfung nach 45 Sekunden abgebrochen.");
+            eprintln!("{}", crate::i18n::text("Stillclip: WebView-Fotoprüfung nach 45 Sekunden abgebrochen.", "Stillclip: WebView screenshot check timed out after 45 seconds."));
             std::process::exit(1);
         });
     }
@@ -2065,7 +2085,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         launched = true;
                         if let Some(path) = app.recovered.take() {
                             app.notify(
-                                "Eine unterbrochene Aufnahme wurde wiederhergestellt.",
+                                crate::i18n::text("Eine unterbrochene Aufnahme wurde wiederhergestellt.", "An interrupted recording has been recovered."),
                                 false,
                                 Some(path),
                             );
@@ -2101,7 +2121,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     HOTKEY_MARKER if !app.capture.transitioning => app.mark(),
                     HOTKEY_REPLAY | HOTKEY_REPLAY_LONG if !app.recording && !app.busy && !app.capture.transitioning => {
-                        app.notify("Es läuft keine Aufnahme. Starte zuerst die Aufnahme.", true, None);
+                        app.notify(crate::i18n::text("Es läuft keine Aufnahme. Starte zuerst die Aufnahme.", "No recording is running. Start recording first."), true, None);
                     }
                     HOTKEY_RECORD => {
                         let next = if app.recording || app.capture.transitioning { "stop" } else { "start" };
@@ -2124,8 +2144,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         })
                         .collect();
                     app.notify(
-                        &format!(
-                            "Tastenkürzel {} ist bereits von einem anderen Programm belegt.",
+                        &crate::tr_format!(
+                            "Tastenkürzel {} ist bereits von einem anderen Programm belegt.", "Shortcut {} is already used by another program.",
                             names.join(", ")
                         ),
                         true,
@@ -2150,7 +2170,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if app.busy || app.capture.transitioning || !app.exports.is_empty() || app.audio_test.active.is_some() || app.dragging.is_some() {
                             app.capture.request(false);
                             app.advance_capture(proxy.clone());
-                            app.status = "Vorgang wird abgeschlossen, danach schließt Stillclip…".into();
+                            app.status = crate::i18n::text("Vorgang wird abgeschlossen, danach schließt Stillclip…", "Finishing the current operation before quitting Stillclip…").into();
                         } else if app.recording {
                             app.recording_job("stop", proxy.clone());
                         } else {
@@ -2193,10 +2213,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     if !app.recording || app.auto_started {
                         app.auto_started = true;
                         app.restarts.clear();
-                        app.notify(&format!("{name} erkannt – die Aufnahme startet."), false, None);
+                        app.notify(&crate::tr_format!("{name} erkannt – die Aufnahme startet.", "{name} detected — starting recording."), false, None);
                         app.recording_job("start", proxy.clone());
                     } else {
-                        app.notify(&format!("{name} erkannt – Clips werden danach benannt."), false, None);
+                        app.notify(&crate::tr_format!("{name} erkannt – Clips werden danach benannt.", "{name} detected — clips will use its name."), false, None);
                     }
                 }
                 app.update_tray();
@@ -2210,7 +2230,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if app.auto_started {
                     app.auto_started = false;
-                    app.notify(&format!("{name} beendet – die Aufnahme wird gestoppt."), false, None);
+                    app.notify(&crate::tr_format!("{name} beendet – die Aufnahme wird gestoppt.", "{name} closed — stopping recording."), false, None);
                     app.recording_job("stop", proxy.clone());
                 }
                 app.update_tray();
@@ -2257,8 +2277,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         app.tray_hint_shown = true;
                         if let Some(tray) = &app.tray {
                             tray.notify(
-                                "Stillclip läuft weiter",
-                                "Die Aufnahme und dein Tastenkürzel bleiben aktiv. Rechtsklick auf das Symbol zum Beenden.",
+                                crate::i18n::text("Stillclip läuft weiter", "Stillclip is still running"),
+                                crate::i18n::text("Die Aufnahme und dein Tastenkürzel bleiben aktiv. Rechtsklick auf das Symbol zum Beenden.", "Recording and shortcuts are still active. Right-click the tray icon to quit."),
                             );
                         }
                     }
@@ -2268,7 +2288,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     if app.busy || app.capture.transitioning || !app.exports.is_empty() || app.audio_test.active.is_some() || app.dragging.is_some() {
                         app.capture.request(false);
                         app.advance_capture(proxy.clone());
-                        app.status = "Vorgang wird abgeschlossen, danach schließt Stillclip…".into();
+                        app.status = crate::i18n::text("Vorgang wird abgeschlossen, danach schließt Stillclip…", "Finishing the current operation before quitting Stillclip…").into();
                         app.sync(&view);
                     } else if app.recording {
                         app.recording_job("stop", proxy.clone());
@@ -2353,13 +2373,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
+    i18n::set_language(settings::load_settings(&settings::config_dir()).language);
     if let Err(error) = run() {
         if std::env::args_os().any(|arg| arg == "--screenshot") {
             eprintln!("Stillclip: {error}");
             std::process::exit(1);
         }
-        let text: Vec<u16> = format!(
-            "Stillclip konnte nicht gestartet werden:\n{error}\n\nBenötigt wird die Microsoft Edge WebView2-Laufzeit."
+        let text: Vec<u16> = crate::tr_format!(
+            "Stillclip konnte nicht gestartet werden:\n{error}\n\nBenötigt wird die Microsoft Edge WebView2-Laufzeit.", "Stillclip could not start:\n{error}\n\nMicrosoft Edge WebView2 Runtime is required. Run the Stillclip installer to set it up."
         )
         .encode_utf16()
         .chain(Some(0))

@@ -13,7 +13,7 @@ const fs = require('node:fs/promises');
     page.on('pageerror', e => errors.push(e.message));
     await page.route('http://app.localhost/**', async route => {
       const name = new URL(route.request().url()).pathname.slice(1) || 'index.html';
-      if (!['index.html', 'app.css', 'app.js'].includes(name)) return route.abort();
+      if (!['index.html', 'app.css', 'i18n.js', 'app.js'].includes(name)) return route.abort();
       await route.fulfill({ path: path.join(__dirname, '../ui', name),
         contentType: name.endsWith('.html') ? 'text/html' : name.endsWith('.css') ? 'text/css' : 'text/javascript' });
     });
@@ -227,7 +227,62 @@ const fs = require('node:fs/promises');
     await page.click('#audio-test-cancel'); assert.equal((await page.evaluate(() => window.messages.at(-1))).action, 'cancel_audio_test');
     await page.evaluate(() => window.setState({ audio_test: { running: false, levels: [], src: 'http://clip.localhost/audio-test/1' } }));
     assert(await page.locator('#audio-preview').isVisible());
+    // Language switches are immediate, preserve drafts, and send only language.
+    await page.setViewportSize({ width: 1280, height: 840 });
+    await page.selectOption('#setting-fps', '30');
+    await page.selectOption('#profile-game', 'valorant-win64-shipping.exe');
+    await page.selectOption('#profile-fps', '60');
+    await page.selectOption('#setting-language', 'en');
+    assert.deepEqual(await page.evaluate(() => window.messages.at(-1)), { action: 'set_language', language: 'en' });
+    const englishSettings = { ...settingsMessage.settings, language: 'en' };
+    await page.evaluate(settings => window.setState({ settings }), englishSettings);
+    assert.equal(await page.locator('html').getAttribute('lang'), 'en');
+    assert.equal((await page.locator('#nav-settings').textContent()).trim(), 'Settings');
+    assert.equal(await page.inputValue('#setting-fps'), '30', 'language change must keep unsaved capture settings');
+    assert.equal(await page.inputValue('#profile-fps'), '60', 'language change must keep unsaved game profile');
+    assert.equal(await page.locator('#setting-language').getAttribute('aria-label'), 'Language');
+    for (const width of [1280, 720]) {
+      await page.setViewportSize({ width, height: 840 });
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `English settings overflow at ${width}`);
+      if (shotDir) await page.screenshot({ path: path.join(shotDir, `settings-en-${width}.png`), animations: 'disabled' });
+    }
+    await page.click('#save-settings');
+    const savedEnglish = await page.evaluate(() => window.messages.at(-1).settings);
+    assert.equal(savedEnglish.language, 'en'); assert.equal(savedEnglish.fps, 30);
+    // User content that matches a translated UI label must never be translated.
+    const namedClip = { ...clipsFixture[0], name: 'Bibliothek', game: 'Einstellungen', tags: ['Aufnahme'] };
+    await page.evaluate(({ settings, clips }) => window.setState({ settings, clips, exports: [] }), { settings: savedEnglish, clips: [namedClip] });
+    await page.click('#nav-library'); await page.click('#reset-filters'); await page.fill('#search', '');
+    assert.match(await page.locator('.clip-card').textContent(), /Bibliothek/);
+    assert.equal(await page.locator('#search').getAttribute('placeholder'), 'Search');
+    await page.locator('.clip-card').click();
+    await page.waitForFunction(() => document.getElementById('editor-video').readyState >= 2);
+    assert.equal(await page.locator('#editor-title').textContent(), 'Bibliothek');
+    assert.equal(await page.inputValue('#clip-game'), 'Einstellungen');
+    assert.equal(await page.inputValue('#clip-tags'), 'Aufnahme');
+    assert.match(await page.locator('#editor-subtitle').textContent(), /no audio/);
+    await page.selectOption('#trim-mode', 'discord_nitro');
+    assert.equal(await page.locator('#trim-label').textContent(), 'Queue Discord export');
+    await page.fill('#trim-start', '1'); await page.locator('#trim-start').dispatchEvent('change');
+    await page.evaluate(settings => window.setState({ settings }), { ...savedEnglish, language: 'de' });
+    assert.equal(Number(await page.inputValue('#trim-start')), 1, 'switching language must preserve the selected clip range');
+    assert.equal(await page.locator('#editor-title').textContent(), 'Bibliothek');
+    assert.match(await page.locator('#editor-subtitle').textContent(), /ohne Ton/);
+    await page.click('#close-editor');
+    await page.reload();
+    await page.evaluate(settings => window.setState({ settings, ffmpeg_available: true }), savedEnglish);
+    assert.equal(await page.locator('html').getAttribute('lang'), 'en', 'the native persisted language must apply after reload');
+    assert.match((await page.locator('#nav-library').textContent()).trim(), /^Library\s*0$/);
+    assert.equal(await page.evaluate(() => {
+      const name = 'Bibliothek <script> {0}';
+      return window.i18n.tr`Spiel ${name}`;
+    }), 'Spiel Bibliothek <script> {0}', 'unknown templates keep interpolated user text intact');
+    const mismatchedPlaceholders = await page.evaluate(() => Object.entries(window.i18n.english).filter(([de, en]) => {
+      const slots = value => (value.match(/\{\d+\}/g) || []).sort().join(',');
+      return slots(de) !== slots(en);
+    }));
+    assert.deepEqual(mismatchedPlaceholders, [], 'translations must preserve each interpolation slot');
     assert.deepEqual(errors, []);
-    console.log('UI checks passed: recording, profiles, favorites, tags/filters, queue progress/cancellation, audio test, native drag IPC, portrait crops/highlights, 1280/720px layout and video playback.');
+    console.log('UI checks passed: German/English switching, persisted language, draft/user-content preservation, recording, profiles, favorites, tags/filters, queue progress/cancellation, audio test, native drag IPC, portrait crops/highlights, 1280/720px layout and video playback.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

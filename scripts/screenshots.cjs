@@ -41,7 +41,7 @@ const scene = index => {
     page.on('pageerror', e => errors.push(e.message));
     await page.route('http://app.localhost/**', route => {
       const file = new URL(route.request().url()).pathname.slice(1) || 'index.html';
-      if (!['index.html','app.css','app.js'].includes(file)) return route.abort();
+      if (!['index.html','app.css','i18n.js','app.js'].includes(file)) return route.abort();
       return route.fulfill({ path: path.join(root,'ui',file), contentType: file.endsWith('.html')?'text/html':file.endsWith('.css')?'text/css':'text/javascript' });
     });
     await page.route('http://clip.localhost/**', route => {
@@ -56,15 +56,15 @@ const scene = index => {
     await page.addInitScript(() => { window.ipc = { postMessage: () => {} }; });
     await page.goto('http://app.localhost/');
     const version = /^version = "([^"]+)"/m.exec(await fs.readFile(path.join(root,'Cargo.toml'),'utf8'))[1];
-    const names = ['Neon — Highlight','Orbit — Runde 02','Grid — Favorit','Shift — Rückblick','Afterglow — Auswahl','Neon — Hochkant'];
+    const names = ['Neon — Highlight','Orbit — Round 02','Grid — Favorite','Shift — Replay','Afterglow — Selection','Neon — Portrait'];
     const clips = names.map((name,i) => ({ id:i+1,name,src:`http://clip.localhost/${i+1}`,thumb:`http://clip.localhost/thumb/${i+1}`,
       path:`C:\\Stillclip\\clips\\Demo-${i+1}.webm`,duration:12,width:960,height:540,audio:false,bytes:842000+i*124000,
-      extension:'webm',created:1794823200-i*3600,game:'Demo',tags:i%2?['Rückblick']:['Highlight'],favorite:i===0||i===2,markers:[3,8],pending:false }));
+      extension:'webm',created:1794823200-i*3600,game:'Demo',tags:i%2?['Replay']:['Highlight'],favorite:i===0||i===2,markers:[3,8],pending:false }));
     await page.evaluate(({version,clips}) => window.setState({version,clips,ffmpeg_available:true,ffmpeg_path:'C:\\Tools\\ffmpeg.exe',clips_dir:'C:\\Stillclip\\clips',
-      settings:{replay_seconds:30,quality:'p1080',fps:60,microphone:true},
-      displays:[{name:'DISPLAY1',label:'Hauptbildschirm · 1920×1080',width:1920,height:1080,primary:true}],
+      settings:{language:'en',replay_seconds:30,quality:'p1080',fps:60,microphone:true},
+      displays:[{name:'DISPLAY1',label:'Main display · 1920×1080',width:1920,height:1080,primary:true}],
       capabilities:{probed:true,ddagrab:true,gfxcapture:true,encoders:['nvenc']},encoders:[{id:'nvenc',label:'NVIDIA NVENC',available:true}],selected_encoder:'NVIDIA NVENC',
-      microphones:[{id:'demo-mic',name:'Standardmikrofon'}],default_output:'Standardausgabe',free_bytes:240*1024**3,clips_bytes:8*1024**2,
+      microphones:[{id:'demo-mic',name:'Default microphone'}],default_output:'Default output',free_bytes:240*1024**3,clips_bytes:8*1024**2,
       builtin_games:[{name:'VALORANT',exe:'valorant-win64-shipping.exe'},{name:'Counter-Strike 2',exe:'cs2.exe'}]
     }),{version,clips});
     await page.locator('.thumbnail img').last().waitFor();
@@ -89,7 +89,7 @@ const scene = index => {
     await page.fill('#trim-start','5'); await page.locator('#trim-start').dispatchEvent('change');
     await page.click('#highlight-add');
     await page.selectOption('#highlight-mode','discord_nitro'); await page.selectOption('#highlight-format','720');
-    await page.evaluate(()=>window.setState({exports:[{id:1,label:'Neon — Highlight · Discord',running:true,percent:62,phase:'Discord: Video komprimieren',eta_seconds:14,cancelling:false},{id:2,label:'Highlights · 2 Ausschnitte',running:false,percent:0,phase:'Wartet',cancelling:false}]}));
+    await page.evaluate(()=>window.setState({exports:[{id:1,label:'Neon — Highlight · Discord',running:true,percent:62,phase:'Discord: Compressing video',eta_seconds:14,cancelling:false},{id:2,label:'Highlights · 2 excerpts',running:false,percent:0,phase:'Queued',cancelling:false}]}));
     await page.locator('#editor-export-list').scrollIntoViewIfNeeded();
     await page.locator('.editor').screenshot({path:path.join(out,'exports.png'),animations:'disabled'});
     assert.deepEqual(errors,[]);

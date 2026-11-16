@@ -123,3 +123,9 @@ Die IDs stehen in der Actions-URL beziehungsweise in der GitHub-API-Antwort
 für den Release-Entwurf. Bereits veröffentlichte Releases werden abgewiesen.
 Nur der manuell gestartete Veröffentlichungsjob hat Schreibrechte; der
 normale Build bleibt auf lesenden Zugriff beschränkt.
+
+## Sprachwahl und Installer
+
+`src/i18n.rs` enthält die gespeicherte Sprache und native Texte; `ui/i18n.js` enthält die englischen UI-Übersetzungen. Benutzerinhalte werden nicht übersetzt. Neue Bedienelemente und Meldungen müssen beide Sprachen unterstützen. Die Browser-Tests prüfen Sprachwechsel, Entwürfe und unveränderte Benutzerinhalte.
+
+Die beiden Installer, Paketprüfungen und Quellpakete sind unter [Installation & packaging (English)](INSTALLATION.md#building-the-packages) beschrieben. `verify.yml` verwendet den tatsächlich ausgelieferten FFmpeg-Build für die synthetischen Tests.

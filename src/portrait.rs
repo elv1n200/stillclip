@@ -14,7 +14,7 @@ impl Crop {
             || !(0.0..=1.0).contains(&self.y)
             || ![720, 1080].contains(&self.width)
         {
-            return Err("Der Hochkant-Ausschnitt ist ungültig.".into());
+            return Err(crate::i18n::text("Der Hochkant-Ausschnitt ist ungültig.", "The portrait crop is invalid.").into());
         }
         Ok(self)
     }

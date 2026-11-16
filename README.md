@@ -7,11 +7,13 @@
 Stillclip keeps a rolling buffer of your gameplay. Press a key to save the moment,
 then trim it, build a highlight reel, and export it for Discord or in portrait format.
 
-[![Download for Windows](docs/images/download.svg)](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-windows-x64.zip)
+[![Download for Windows](docs/images/download.svg)](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-setup-online-x64.exe)
+
+**[Online installer](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-setup-online-x64.exe) · [Offline installer](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-setup-offline-x64.exe) · [Portable ZIP](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-windows-x64.zip)**
 
 [![Build and tests](https://img.shields.io/badge/CI-Build_%26_Tests-e4a0b7?style=flat-square&labelColor=303030)](https://github.com/elv1n200/stillclip/actions/workflows/verify.yml) ![Windows x64](https://img.shields.io/badge/Windows-x64-171717?style=flat-square&labelColor=303030&color=e4a0b7) ![Rust + FFmpeg](https://img.shields.io/badge/Rust-FFmpeg-171717?style=flat-square&labelColor=303030&color=e4a0b7)
 
-[Quick start](#quick-start) · [Features](#features) · [User guide (German)](docs/USAGE.md) · [Changelog (German)](CHANGELOG.md)
+[Quick start](#quick-start) · [Features](#features) · [User guide (German)](docs/USAGE.md) · [Changelog](CHANGELOG.md)
 
 </div>
 
@@ -24,7 +26,7 @@ You decide what to keep and what to share.
 
 ![Stillclip library with favorites, tags, and six demo clips](docs/images/library.png)
 
-<sub>The app interface is currently in German. These previews use synthetic demo clips, not actual gameplay recordings.</sub>
+<sub>Available in English and German. These previews use synthetic demo clips, not actual gameplay recordings.</sub>
 
 ## Features
 
@@ -61,20 +63,28 @@ minimizing to the system tray lets them continue.
 
 ## Quick start
 
-1. **[Download the Windows ZIP](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-windows-x64.zip)** and extract it completely into a writable folder.
-2. **Install the prerequisites:** [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) and a [Windows build of FFmpeg](https://ffmpeg.org/download.html#build-windows). Keep `ffprobe.exe` next to `ffmpeg.exe` if possible.
-3. **Launch `stillclip.exe`.** If FFmpeg is not detected, select it under **Settings (Einstellungen) → FFmpeg**. Choose your display, audio sources, and an optional game profile.
-4. **Click Start recording (Aufnahme starten), then press <kbd>F8</kbd>.** Your saved moment appears in the library.
+1. **Choose an installer:** [Online](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-setup-online-x64.exe) is a smaller download and fetches components during setup. [Offline](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-setup-offline-x64.exe) includes everything needed for installation.
+2. **Run setup and open Stillclip from the Start menu.** FFmpeg is included; Microsoft WebView2 is installed automatically when needed. No Rust, Python, or separate FFmpeg installation is required.
+3. **Choose your language in Settings → Interface → Language.** English and Deutsch switch immediately and stay selected after restarting. Then choose your display, audio sources, and optional game profile.
+4. **Click Start recording, then press <kbd>F8</kbd>.** Your saved replay appears in the library.
+
+| Download | Best for | Internet during installation |
+| :--- | :--- | :--- |
+| **Online installer** | A small setup download; fetches verified components as needed. | Required |
+| **Offline installer** | Installing on a PC without internet, or keeping a complete installation package. | Not required |
+| **Portable ZIP** | Keeping Stillclip in your own writable folder. Includes FFmpeg. | WebView2 must already be installed |
 
 | Requirement | Details |
 | :--- | :--- |
-| Windows x64 | Windows 11 recommended. Screen capture and system audio are also designed to work on Windows 10. |
+| Windows x64 | Windows 11 recommended; Windows 10 build 19041 or later. |
 | Game audio only | Windows build 20348 or later, such as Windows 11. |
-| Game window only | FFmpeg with `gfxcapture` and its `hwnd` option; the app checks for support. |
-| Storage | By default, `clips/` and `settings/` live next to the EXE. No installer needed. |
+| Game window only | Included FFmpeg supports `gfxcapture` with `hwnd`; the app checks system support. |
+| Installed recordings | Your Windows **Videos/Stillclip** folder, or a custom folder selected in Settings. |
+| Installed settings | `%LOCALAPPDATA%\Stillclip\settings`. Updates and uninstall keep your data. |
+| Portable storage | `clips/` and `settings/` next to `stillclip.exe`, as in previous releases. |
 
-**The ZIP includes Stillclip and its documentation. FFmpeg and WebView2 are separate prerequisites.**
-Quit Stillclip before updating, and keep your existing `clips/` and `settings/` folders.
+Quit Stillclip before updating. Both installers update the same application; you can switch between them.
+[Installation, portable migration, checksums, and uninstall →](docs/INSTALLATION.md)
 
 ## Good to know
 

@@ -1,0 +1,16 @@
+Stillclip includes separate media tools and uses Microsoft WebView2.
+
+FFmpeg and ffprobe in this release include x264 and are distributed under the
+GNU General Public License, version 3 or later. License notices are installed
+in tools/licenses. The exact corresponding sources, dependency licenses and
+build recipe are freely available as stillclip-media-source.tar.xz alongside
+each release at https://github.com/elv1n200/stillclip/releases.
+
+Microsoft Edge WebView2 Runtime is a Microsoft component, installed only when
+missing and shared with other applications. Its use is governed by Microsoft's
+WebView2 Runtime terms: https://developer.microsoft.com/microsoft-edge/webview2/
+Microsoft maintains Evergreen Runtime updates separately from Stillclip.
+The Stillclip uninstaller leaves this shared runtime installed.
+
+Your clips and settings are stored separately from the installed application
+and are kept when you update or uninstall Stillclip.

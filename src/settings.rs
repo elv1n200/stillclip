@@ -140,17 +140,17 @@ impl Hotkey {
     /// Human readable label such as `Strg + Alt + F8`.
     pub fn label(&self) -> String {
         if !self.is_set() {
-            return "Nicht belegt".into();
+            return crate::i18n::text("Nicht belegt", "Not assigned").into();
         }
         let mut parts = Vec::new();
         if self.ctrl {
-            parts.push("Strg");
+            parts.push(crate::i18n::text("Strg", "Ctrl"));
         }
         if self.alt {
             parts.push("Alt");
         }
         if self.shift {
-            parts.push("Umschalt");
+            parts.push(crate::i18n::text("Umschalt", "Shift"));
         }
         if self.win {
             parts.push("Win");
@@ -348,6 +348,8 @@ impl Default for GameProfile {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(deserialize_with = "lenient")]
+    pub language: crate::i18n::Language,
     pub clips_dir: PathBuf,
     pub replay_seconds: u32,
     pub fps: u32,
@@ -412,7 +414,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            clips_dir: application_dir().join("clips"),
+            language: crate::i18n::Language::default(),
+            clips_dir: storage_paths().1,
             replay_seconds: mechanics::DEFAULT_REPLAY_SECONDS,
             fps: mechanics::DEFAULT_FPS,
             quality: Quality::P720,
@@ -600,7 +603,29 @@ pub fn application_dir() -> PathBuf {
 }
 
 pub fn default_config_dir() -> PathBuf {
-    application_dir().join("settings")
+    storage_paths().0
+}
+
+pub fn config_dir() -> PathBuf {
+    std::env::var_os("STILLCLIP_DATA_DIR").map(PathBuf::from).unwrap_or_else(default_config_dir)
+}
+
+fn storage_paths_for(app: &Path, installed: bool, local: Option<PathBuf>, videos: Option<PathBuf>) -> (PathBuf, PathBuf) {
+    if installed {
+        if let Some(local) = local {
+            let data = local.join("Stillclip");
+            return (data.join("settings"), videos.map(|dir| dir.join("Stillclip")).unwrap_or_else(|| data.join("clips")));
+        }
+    }
+    (app.join("settings"), app.join("clips"))
+}
+
+fn storage_paths() -> (PathBuf, PathBuf) {
+    let app = application_dir();
+    let installed = app.join("installed.flag").is_file();
+    storage_paths_for(&app, installed,
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        if installed { crate::platform::videos_dir() } else { None })
 }
 
 /// Editors such as Notepad write a UTF-8 byte order mark; serde rejects it,
@@ -612,17 +637,25 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
 }
 
 pub fn load_settings(config_dir: &Path) -> Settings {
-    let settings: Settings = read_json(&config_dir.join("settings.json")).unwrap_or_default();
+    let settings: Settings = read_json(&config_dir.join("settings.json")).unwrap_or_else(|| {
+        let mut settings = Settings::default();
+        if !config_dir.join("settings.json").exists() {
+            if let Ok(language) = fs::read_to_string(application_dir().join("initial-language.txt")) {
+                settings.language = crate::i18n::Language::parse(language.trim()).unwrap_or_default();
+            }
+        }
+        settings
+    });
     settings.sanitized()
 }
 
 pub fn save_settings(config_dir: &Path, settings: &Settings) -> Result<(), String> {
     fs::create_dir_all(config_dir)
-        .map_err(|error| format!("Einstellungsordner konnte nicht erstellt werden: {error}"))?;
+        .map_err(|error| crate::tr_format!("Einstellungsordner konnte nicht erstellt werden: {error}", "Could not create settings folder: {error}"))?;
     let bytes = serde_json::to_vec_pretty(settings)
-        .map_err(|error| format!("Einstellungen konnten nicht gespeichert werden: {error}"))?;
+        .map_err(|error| crate::tr_format!("Einstellungen konnten nicht gespeichert werden: {error}", "Could not save settings: {error}"))?;
     write_atomically(config_dir, "settings.json", &bytes)
-        .map_err(|error| format!("Einstellungen konnten nicht gespeichert werden: {error}"))
+        .map_err(|error| crate::tr_format!("Einstellungen konnten nicht gespeichert werden: {error}", "Could not save settings: {error}"))
 }
 
 /// Writes to a temporary file first so a crash never leaves a half-written file.
@@ -671,6 +704,37 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn language_persists_and_old_or_unknown_values_keep_german_defaults() {
+        use crate::i18n::Language;
+        let directory = TestDir::new();
+        let mut settings = Settings::default();
+        let before = settings.clone();
+        settings.language = Language::En;
+        assert!(!before.capture_changed(&settings));
+        save_settings(&directory.0, &settings).unwrap();
+        assert_eq!(load_settings(&directory.0), settings);
+        for json in [r#"{}"#, r#"{"language":"fr","fps":30}"#, r#"{"language":12,"fps":30}"#] {
+            fs::write(directory.0.join("settings.json"), json).unwrap();
+            let loaded = load_settings(&directory.0);
+            assert_eq!(loaded.language, Language::De);
+            if json != "{}" { assert_eq!(loaded.fps, 30); }
+        }
+    }
+
+    #[test]
+    fn installed_data_is_separate_and_portable_paths_stay_compatible() {
+        let app = Path::new("program");
+        let local = PathBuf::from("user-data");
+        let videos = PathBuf::from("redirected-videos");
+        assert_eq!(storage_paths_for(app, false, Some(local.clone()), Some(videos.clone())),
+            (app.join("settings"), app.join("clips")));
+        assert_eq!(storage_paths_for(app, true, Some(local.clone()), Some(videos)),
+            (local.join("Stillclip/settings"), PathBuf::from("redirected-videos/Stillclip")));
+        assert_eq!(storage_paths_for(app, true, Some(local.clone()), None),
+            (local.join("Stillclip/settings"), local.join("Stillclip/clips")));
     }
 
     #[test]

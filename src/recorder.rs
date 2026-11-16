@@ -393,9 +393,9 @@ impl Recorder {
             match AudioPipe::start(source, config.system_gain) {
                 Ok(pipe) => pipes.push(pipe),
                 Err(error) if config.audio_process.is_some() => {
-                    return Err(format!("Spielton konnte nicht aufgenommen werden. {error}"))
+                    return Err(crate::tr_format!("Spielton konnte nicht aufgenommen werden. {error}", "Could not record game audio. {error}"))
                 }
-                Err(error) => warnings.push(format!("Systemton nicht verfügbar: {error}")),
+                Err(error) => warnings.push(crate::tr_format!("Systemton nicht verfügbar: {error}", "System audio unavailable: {error}")),
             }
         }
         if let Some(device) = &config.microphone {
@@ -406,7 +406,7 @@ impl Recorder {
                 config.microphone_gain,
             ) {
                 Ok(pipe) => pipes.push(pipe),
-                Err(error) => warnings.push(format!("Mikrofon nicht verfügbar: {error}")),
+                Err(error) => warnings.push(crate::tr_format!("Mikrofon nicht verfügbar: {error}", "Microphone unavailable: {error}")),
             }
         }
         Ok(pipes)
@@ -415,21 +415,21 @@ impl Recorder {
     /// Starts recording. Nothing is captured until this is called.
     pub fn start(&mut self, config: SessionConfig) -> Result<SessionInfo, String> {
         if self.session.is_some() {
-            return Err("Eine Aufnahme läuft bereits.".into());
+            return Err(crate::i18n::text("Eine Aufnahme läuft bereits.", "A recording is already running.").into());
         }
         if !cfg!(windows) {
-            return Err("Die Bildschirmaufnahme ist für Windows eingerichtet.".into());
+            return Err(crate::i18n::text("Die Bildschirmaufnahme ist für Windows eingerichtet.", "Screen capture is configured for Windows.").into());
         }
         if !(1..=240).contains(&config.fps) {
-            return Err("Die Bildrate muss zwischen 1 und 240 FPS liegen.".into());
+            return Err(crate::i18n::text("Die Bildrate muss zwischen 1 und 240 FPS liegen.", "Frame rate must be between 1 and 240 FPS.").into());
         }
         fs::create_dir_all(&config.clips_dir)
-            .map_err(|error| format!("Der Clip-Ordner konnte nicht erstellt werden: {error}"))?;
+            .map_err(|error| crate::tr_format!("Der Clip-Ordner konnte nicht erstellt werden: {error}", "Could not create clips folder: {error}"))?;
         if config.min_free_bytes > 0 {
             if let Some(free) = crate::platform::free_bytes(&config.clips_dir) {
                 if free < config.min_free_bytes {
-                    return Err(format!(
-                        "Auf dem Laufwerk des Clip-Ordners sind nur noch {} frei. Mindestens {} werden verlangt.",
+                    return Err(crate::tr_format!(
+                        "Auf dem Laufwerk des Clip-Ordners sind nur noch {} frei. Mindestens {} werden verlangt.", "The clips drive has only {} free. At least {} is required.",
                         format_bytes(free),
                         format_bytes(config.min_free_bytes)
                     ));
@@ -438,7 +438,7 @@ impl Recorder {
         }
         let clips_dir = plain_path(
             &fs::canonicalize(&config.clips_dir)
-                .map_err(|error| format!("Der Clip-Ordner ist nicht verfügbar: {error}"))?,
+                .map_err(|error| crate::tr_format!("Der Clip-Ordner ist nicht verfügbar: {error}", "Clips folder unavailable: {error}"))?,
         );
         let dir = buffer_dir(&clips_dir);
         prepare_buffer_dir(&dir)?;
@@ -451,10 +451,10 @@ impl Recorder {
         let log_path = dir.join("ffmpeg.log");
         let strategies = if let Some(window) = &config.window {
             if !config.capabilities.gfxcapture {
-                return Err("Diese FFmpeg-Version bietet keine Fensteraufnahme. Wähle eine Version mit gfxcapture in den Einstellungen.".into());
+                return Err(crate::i18n::text("Diese FFmpeg-Version bietet keine Fensteraufnahme. Wähle eine Version mit gfxcapture in den Einstellungen.", "This FFmpeg version does not support window capture. Choose a build with gfxcapture in Settings.").into());
             }
             if crate::games::window_size(window.hwnd, window.pid).is_none() {
-                return Err("Das gewählte Fenster ist geschlossen oder minimiert.".into());
+                return Err(crate::i18n::text("Das gewählte Fenster ist geschlossen oder minimiert.", "The selected window is closed or minimized.").into());
             }
             let mut encoders = vec![config.encoder, Encoder::Cpu];
             encoders.dedup();
@@ -480,12 +480,12 @@ impl Recorder {
                 .as_ref()
                 .is_some_and(|w| crate::games::window_size(w.hwnd, w.pid).is_none())
             {
-                return Err("Das Aufnahmefenster ist nicht mehr verfügbar.".into());
+                return Err(crate::i18n::text("Das Aufnahmefenster ist nicht mehr verfügbar.", "The capture window is no longer available.").into());
             }
             let inputs: Vec<AudioInput> = audio.iter().map(|pipe| pipe.input.clone()).collect();
             let _ = fs::remove_file(&list_path);
             let log = File::create(&log_path).map_err(|error| {
-                format!("Das Aufnahmeprotokoll konnte nicht geöffnet werden: {error}")
+                crate::tr_format!("Das Aufnahmeprotokoll konnte nicht geöffnet werden: {error}", "Could not open recording log: {error}")
             })?;
             let mut command = capture::build_command(
                 &self.ffmpeg,
@@ -529,7 +529,7 @@ impl Recorder {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(
-                        "Das Aufnahmefenster wurde während des Starts geschlossen oder minimiert."
+                        crate::i18n::text("Das Aufnahmefenster wurde während des Starts geschlossen oder minimiert.", "The capture window closed or minimized while recording was starting.")
                             .into(),
                     );
                 }
@@ -593,8 +593,8 @@ impl Recorder {
             return Ok(info);
         }
         let _ = fs::remove_dir_all(&dir);
-        Err(format!(
-            "Die Bildschirmaufnahme konnte nicht gestartet werden. {}",
+        Err(crate::tr_format!(
+            "Die Bildschirmaufnahme konnte nicht gestartet werden. {}", "Could not start screen capture. {}",
             failures.join(" · ")
         ))
     }
@@ -608,7 +608,7 @@ impl Recorder {
             .as_ref()
             .is_some_and(|window| crate::games::window_size(window.hwnd, window.pid).is_none())
         {
-            return Some(PollIssue { message: "Das Aufnahmefenster wurde geschlossen oder minimiert. Die Aufnahme wird beendet.".into(), capture_lost: false, stop_requested: true });
+            return Some(PollIssue { message: crate::i18n::text("Das Aufnahmefenster wurde geschlossen oder minimiert. Die Aufnahme wird beendet.", "The capture window closed or minimized. Stopping recording.").into(), capture_lost: false, stop_requested: true });
         }
         let keep_full = session.keep_full;
         match session.child.try_wait() {
@@ -622,8 +622,8 @@ impl Recorder {
                     let _ = fs::remove_dir_all(&session.dir);
                 }
                 return Some(PollIssue {
-                    message: format!(
-                        "Die Bildschirmaufnahme wurde unerwartet beendet ({status}). {detail}"
+                    message: crate::tr_format!(
+                        "Die Bildschirmaufnahme wurde unerwartet beendet ({status}). {detail}", "Screen capture stopped unexpectedly ({status}). {detail}"
                     ),
                     capture_lost: !keep_full,
                     stop_requested: false,
@@ -635,7 +635,7 @@ impl Recorder {
                     let _ = session.child.wait();
                 }
                 return Some(PollIssue {
-                    message: format!("Der Aufnahmestatus konnte nicht geprüft werden: {error}"),
+                    message: crate::tr_format!("Der Aufnahmestatus konnte nicht geprüft werden: {error}", "Could not check recording status: {error}"),
                     capture_lost: false,
                     stop_requested: false,
                 });
@@ -649,8 +649,8 @@ impl Recorder {
             if let Some(free) = crate::platform::free_bytes(&session.clips_dir) {
                 if free < session.min_free_bytes {
                     return Some(PollIssue {
-                        message: format!(
-                            "Auf dem Laufwerk sind nur noch {} frei. Die Aufnahme wird beendet.",
+                        message: crate::tr_format!(
+                            "Auf dem Laufwerk sind nur noch {} frei. Die Aufnahme wird beendet.", "The drive has only {} free. Stopping recording.",
                             format_bytes(free)
                         ),
                         capture_lost: false,
@@ -673,20 +673,20 @@ impl Recorder {
 
     /// Stops recording. Returns the full-session video when that mode is on.
     pub fn stop(&mut self) -> Result<Option<PathBuf>, String> {
-        let mut session = self.session.take().ok_or("Es läuft keine Aufnahme.")?;
+        let mut session = self.session.take().ok_or(crate::i18n::text("Es läuft keine Aufnahme.", "No recording is running."))?;
         let status = finish_process(&mut session.child, Duration::from_secs(30));
         for pipe in &mut session.audio {
             pipe.stop();
         }
         let status = status
-            .map_err(|error| format!("Die Aufnahme konnte nicht abgeschlossen werden: {error}"))?;
+            .map_err(|error| crate::tr_format!("Die Aufnahme konnte nicht abgeschlossen werden: {error}", "Could not finalize recording: {error}"))?;
         if !status.success() {
             let detail = log_detail(&session.log_path);
             if !session.keep_full {
                 let _ = fs::remove_dir_all(&session.dir);
             }
-            return Err(format!(
-                "FFmpeg hat die Aufnahme nicht sauber beendet ({status}). {detail}"
+            return Err(crate::tr_format!(
+                "FFmpeg hat die Aufnahme nicht sauber beendet ({status}). {detail}", "FFmpeg did not finish recording cleanly ({status}). {detail}"
             ));
         }
         let mut saved = None;
@@ -694,9 +694,9 @@ impl Recorder {
             let segments = scan_segments(&session.dir, &session.list_path);
             if segments.is_empty() {
                 let _ = fs::remove_dir_all(&session.dir);
-                return Err("Die Aufnahme hat keine Videodaten erzeugt.".into());
+                return Err(crate::i18n::text("Die Aufnahme hat keine Videodaten erzeugt.", "The recording produced no video data.").into());
             }
-            let output = clip_path(&session.clips_dir, "Aufnahme");
+            let output = clip_path(&session.clips_dir, crate::i18n::text("Aufnahme", "Recording"));
             self.export_all(&segments, &output)?;
             saved = Some(output);
         }
@@ -713,24 +713,24 @@ impl Recorder {
         prefix: &str,
     ) -> Result<crate::export::ReplayExport, String> {
         if seconds == 0 {
-            return Err("Die Cliplänge muss mindestens eine Sekunde betragen.".into());
+            return Err(crate::i18n::text("Die Cliplänge muss mindestens eine Sekunde betragen.", "Clip length must be at least one second.").into());
         }
         let session = self
             .session
             .as_mut()
-            .ok_or("Starte zuerst eine Aufnahme.")?;
+            .ok_or(crate::i18n::text("Starte zuerst eine Aufnahme.", "Start recording first."))?;
         if session.started.elapsed() < Duration::from_millis(1500) {
-            return Err("Die Aufnahme ist noch zu kurz. Warte einen Moment.".into());
+            return Err(crate::i18n::text("Die Aufnahme ist noch zu kurz. Warte einen Moment.", "The recording is still too short. Please wait a moment.").into());
         }
         if session
             .last_clip
             .is_some_and(|at| at.elapsed() < CLIP_COOLDOWN)
         {
-            return Err("Der letzte Clip wurde gerade erst gesichert.".into());
+            return Err(crate::i18n::text("Der letzte Clip wurde gerade erst gesichert.", "The last clip was only just saved.").into());
         }
         let segments = scan_segments(&session.dir, &session.list_path);
         if segments.is_empty() {
-            return Err("Es liegen noch keine Videodaten vor. Warte einen Moment.".into());
+            return Err(crate::i18n::text("Es liegen noch keine Videodaten vor. Warte einen Moment.", "No video data is available yet. Please wait a moment.").into());
         }
         let gop = 0.4_f64.max(f64::from(session.fps.max(1)).recip() * 4.0);
         let elapsed = session.started.elapsed().as_secs_f64();
@@ -785,12 +785,12 @@ impl Recorder {
         let session = self
             .session
             .as_mut()
-            .ok_or("Starte zuerst eine Aufnahme.")?;
+            .ok_or(crate::i18n::text("Starte zuerst eine Aufnahme.", "Start recording first."))?;
         if session
             .last_clip
             .is_some_and(|at| at.elapsed() < CLIP_COOLDOWN)
         {
-            return Err("Der letzte Clip wurde gerade erst gesichert.".into());
+            return Err(crate::i18n::text("Der letzte Clip wurde gerade erst gesichert.", "The last clip was only just saved.").into());
         }
         let segments = scan_segments(&session.dir, &session.list_path);
         let earliest = segments
@@ -802,21 +802,21 @@ impl Recorder {
             .filter_map(|s| s.end)
             .fold(f64::NEG_INFINITY, f64::max);
         if !earliest.is_finite() || latest <= earliest {
-            return Err("Es liegen noch keine fertigen Videodaten vor. Warte einen Moment.".into());
+            return Err(crate::i18n::text("Es liegen noch keine fertigen Videodaten vor. Warte einen Moment.", "No completed video data is available yet. Please wait a moment.").into());
         }
         if at + after > latest + 0.001 {
             return Err(
-                "Der Moment ist noch nicht vollständig aufgezeichnet. Warte einen Moment.".into(),
+                crate::i18n::text("Der Moment ist noch nicht vollständig aufgezeichnet. Warte einen Moment.", "The moment has not finished recording. Please wait a moment.").into(),
             );
         }
         let from = (at - before).max(earliest);
         let to = (at + after).min(latest);
         if to - from < 0.5 {
-            return Err("Die Markierung liegt nicht mehr im Puffer.".into());
+            return Err(crate::i18n::text("Die Markierung liegt nicht mehr im Puffer.", "This marker is no longer in the buffer.").into());
         }
         let chosen = span_segments(&segments, from, to);
         if chosen.is_empty() {
-            return Err("Die Markierung liegt nicht mehr im Puffer.".into());
+            return Err(crate::i18n::text("Die Markierung liegt nicht mehr im Puffer.", "This marker is no longer in the buffer.").into());
         }
         let gop = 0.4_f64.max(f64::from(session.fps.max(1)).recip() * 4.0);
         let output = clip_path(&session.clips_dir, &sanitize_prefix(prefix));
@@ -851,7 +851,7 @@ impl Recorder {
         let dir = segments[0]
             .path
             .parent()
-            .ok_or("Der Pufferordner fehlt.")?
+            .ok_or(crate::i18n::text("Der Pufferordner fehlt.", "The buffer folder is missing."))?
             .to_path_buf();
         let list_path = dir.join("export-list.txt");
         let mut list = String::new();
@@ -860,7 +860,7 @@ impl Recorder {
             list.push_str(&format!("file '{escaped}'\n"));
         }
         fs::write(&list_path, list)
-            .map_err(|error| format!("Die Exportliste konnte nicht geschrieben werden: {error}"))?;
+            .map_err(|error| crate::tr_format!("Die Exportliste konnte nicht geschrieben werden: {error}", "Could not write export list: {error}"))?;
         let result = command(&self.ffmpeg)
             .current_dir(&dir)
             .args([
@@ -879,11 +879,11 @@ impl Recorder {
             .args(["-c", "copy", "-movflags", "+faststart", "-f", "mp4"])
             .arg(output)
             .output()
-            .map_err(|error| format!("Die Aufnahme konnte nicht gespeichert werden: {error}"))?;
+            .map_err(|error| crate::tr_format!("Die Aufnahme konnte nicht gespeichert werden: {error}", "Could not save recording: {error}"))?;
         if !result.status.success() || fs::metadata(output).map_or(true, |m| m.len() == 0) {
             let _ = fs::remove_file(output);
-            return Err(format!(
-                "Die Aufnahme konnte nicht gespeichert werden. {}",
+            return Err(crate::tr_format!(
+                "Die Aufnahme konnte nicht gespeichert werden. {}", "Could not save recording. {}",
                 diagnostic(&result.stderr)
             ));
         }
@@ -910,7 +910,7 @@ fn prepare_buffer_dir(dir: &Path) -> Result<(), String> {
         let _ = fs::remove_dir_all(dir);
     }
     fs::create_dir_all(dir)
-        .map_err(|error| format!("Der Pufferordner konnte nicht erstellt werden: {error}"))?;
+        .map_err(|error| crate::tr_format!("Der Pufferordner konnte nicht erstellt werden: {error}", "Could not create buffer folder: {error}"))?;
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -938,7 +938,7 @@ pub fn recover_leftovers(ffmpeg: &Path, clips_dir: &Path) -> Result<Option<PathB
     let mut saved = None;
     if marker.is_some_and(|m| m.keep_full_session) && !segments.is_empty() {
         let recorder = Recorder::new(ffmpeg.to_path_buf());
-        let output = clip_path(clips_dir, "Wiederhergestellte Aufnahme");
+        let output = clip_path(clips_dir, crate::i18n::text("Wiederhergestellte Aufnahme", "Recovered recording"));
         recorder.export_all(&segments, &output)?;
         saved = Some(output);
     }
@@ -1090,10 +1090,10 @@ pub(crate) fn export_span(
 ) -> Result<f64, String> {
     let first = segments
         .first()
-        .ok_or("Keine Segmente zum Sichern vorhanden.")?;
-    let dir = first.path.parent().ok_or("Der Pufferordner fehlt.")?;
+        .ok_or(crate::i18n::text("Keine Segmente zum Sichern vorhanden.", "No segments available to save."))?;
+    let dir = first.path.parent().ok_or(crate::i18n::text("Der Pufferordner fehlt.", "The buffer folder is missing."))?;
     if to <= from {
-        return Err("Der gewünschte Ausschnitt ist leer.".into());
+        return Err(crate::i18n::text("Der gewünschte Ausschnitt ist leer.", "The requested selection is empty.").into());
     }
     // The concat input keeps the recording's own timestamps, so every offset is
     // measured from the first chosen segment's start.
@@ -1128,7 +1128,7 @@ pub(crate) fn export_span(
     }
     let length = (to - base) - cut;
     if length < 0.2 {
-        return Err("Der gewünschte Ausschnitt ist zu kurz.".into());
+        return Err(crate::i18n::text("Der gewünschte Ausschnitt ist zu kurz.", "The requested selection is too short.").into());
     }
     let input = format!(
         "concat:{}",
@@ -1167,15 +1167,15 @@ pub(crate) fn export_span(
         ])
         .arg(output)
         .output()
-        .map_err(|error| format!("Der Clip konnte nicht gespeichert werden: {error}"))?;
+        .map_err(|error| crate::tr_format!("Der Clip konnte nicht gespeichert werden: {error}", "Could not save clip: {error}"))?;
     if !result.status.success() {
-        return Err(format!(
-            "Der Clip konnte nicht gespeichert werden. {}",
+        return Err(crate::tr_format!(
+            "Der Clip konnte nicht gespeichert werden. {}", "Could not save clip. {}",
             diagnostic(&result.stderr)
         ));
     }
     if fs::metadata(output).map_or(true, |metadata| metadata.len() == 0) {
-        return Err("Der Clip enthält keine Videodaten.".into());
+        return Err(crate::i18n::text("Der Clip enthält keine Videodaten.", "The clip contains no video data.").into());
     }
     Ok(base + cut)
 }
@@ -1191,11 +1191,11 @@ pub(crate) fn export_tail(
 ) -> Result<f64, String> {
     let first = segments
         .first()
-        .ok_or("Keine Segmente zum Sichern vorhanden.")?;
+        .ok_or(crate::i18n::text("Keine Segmente zum Sichern vorhanden.", "No segments available to save."))?;
     let last = segments
         .last()
-        .ok_or("Keine Segmente zum Sichern vorhanden.")?;
-    let dir = first.path.parent().ok_or("Der Pufferordner fehlt.")?;
+        .ok_or(crate::i18n::text("Keine Segmente zum Sichern vorhanden.", "No segments available to save."))?;
+    let dir = first.path.parent().ok_or(crate::i18n::text("Der Pufferordner fehlt.", "The buffer folder is missing."))?;
     let mut seek = None;
     if let Some(ffprobe) = ffprobe {
         if let (Some(first_range), Some(last_range)) = (
@@ -1282,15 +1282,15 @@ pub(crate) fn export_tail(
         ])
         .arg(output)
         .output()
-        .map_err(|error| format!("Der Clip konnte nicht gespeichert werden: {error}"))?;
+        .map_err(|error| crate::tr_format!("Der Clip konnte nicht gespeichert werden: {error}", "Could not save clip: {error}"))?;
     if !result.status.success() {
-        return Err(format!(
-            "Der Clip konnte nicht gespeichert werden. {}",
+        return Err(crate::tr_format!(
+            "Der Clip konnte nicht gespeichert werden. {}", "Could not save clip. {}",
             diagnostic(&result.stderr)
         ));
     }
     if fs::metadata(output).map_or(true, |metadata| metadata.len() == 0) {
-        return Err("Der Clip enthält keine Videodaten.".into());
+        return Err(crate::i18n::text("Der Clip enthält keine Videodaten.", "The clip contains no video data.").into());
     }
     Ok(first.start.unwrap_or(0.0) + seek.unwrap_or(0.0))
 }
@@ -1320,7 +1320,7 @@ fn finish_process(
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("FFmpeg hat nicht rechtzeitig reagiert.".into());
+                return Err(crate::i18n::text("FFmpeg hat nicht rechtzeitig reagiert.", "FFmpeg did not respond in time.").into());
             }
             Err(error) => {
                 let _ = child.kill();
@@ -1399,11 +1399,11 @@ pub(crate) fn trim_to_exact_length(
         .args(["-c:a", "copy", "-movflags", "+faststart", "-f", "mp4"])
         .arg(&temporary)
         .output()
-        .map_err(|error| format!("Der Clip konnte nicht exakt zugeschnitten werden: {error}"))?;
+        .map_err(|error| crate::tr_format!("Der Clip konnte nicht exakt zugeschnitten werden: {error}", "Could not trim clip precisely: {error}"))?;
     if !result.status.success() || fs::metadata(&temporary).map_or(true, |m| m.len() == 0) {
         let _ = fs::remove_file(&temporary);
-        return Err(format!(
-            "Der Clip konnte nicht exakt zugeschnitten werden. {}",
+        return Err(crate::tr_format!(
+            "Der Clip konnte nicht exakt zugeschnitten werden. {}", "Could not trim clip precisely. {}",
             diagnostic(&result.stderr)
         ));
     }
@@ -1411,7 +1411,7 @@ pub(crate) fn trim_to_exact_length(
         .map(|()| excess)
         .map_err(|error| {
             let _ = fs::remove_file(&temporary);
-            format!("Der exakte Clip konnte nicht gespeichert werden: {error}")
+            crate::tr_format!("Der exakte Clip konnte nicht gespeichert werden: {error}", "Could not save precisely trimmed clip: {error}")
         })
 }
 
@@ -1469,7 +1469,7 @@ pub fn probe_media(ffmpeg: &Path, input: &Path) -> Result<MediaInfo, String> {
             ])
             .arg(input)
             .output()
-            .map_err(|error| format!("Die Videodaten konnten nicht gelesen werden: {error}"))?;
+            .map_err(|error| crate::tr_format!("Die Videodaten konnten nicht gelesen werden: {error}", "Could not read video data: {error}"))?;
         if output.status.success() {
             if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
                 let duration = value["format"]["duration"]
@@ -1500,11 +1500,11 @@ pub fn probe_media(ffmpeg: &Path, input: &Path) -> Result<MediaInfo, String> {
         .args(["-hide_banner", "-i"])
         .arg(input)
         .output()
-        .map_err(|error| format!("Die Videodaten konnten nicht gelesen werden: {error}"))?;
+        .map_err(|error| crate::tr_format!("Die Videodaten konnten nicht gelesen werden: {error}", "Could not read video data: {error}"))?;
     let text = String::from_utf8_lossy(&output.stderr);
     let duration = parse_duration(&text).ok_or_else(|| {
-        format!(
-            "Die Datei enthält kein lesbares Video. {}",
+        crate::tr_format!(
+            "Die Datei enthält kein lesbares Video. {}", "The file contains no readable video. {}",
             diagnostic(&output.stderr)
         )
     })?;
@@ -1592,18 +1592,18 @@ pub fn trim_controlled(
         mode
     };
     if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
-        return Err("Wähle einen gültigen Clipbereich mit Ende nach dem Anfang.".into());
+        return Err(crate::i18n::text("Wähle einen gültigen Clipbereich mit Ende nach dem Anfang.", "Choose a valid clip range with the end after the start.").into());
     }
     if !input.is_file() {
-        return Err("Die ausgewählte Videodatei wurde nicht gefunden.".into());
+        return Err(crate::i18n::text("Die ausgewählte Videodatei wurde nicht gefunden.", "The selected video file was not found.").into());
     }
     if output.exists() {
-        return Err("Die Zieldatei existiert bereits. Wähle einen neuen Dateinamen.".into());
+        return Err(crate::i18n::text("Die Zieldatei existiert bereits. Wähle einen neuen Dateinamen.", "The output file already exists. Choose a different filename.").into());
     }
     let duration = probe_duration(ffmpeg, input)?;
     if start >= duration || end > duration + 0.1 {
-        return Err(format!(
-            "Der Clipbereich liegt außerhalb des Videos ({duration:.1} Sekunden)."
+        return Err(crate::tr_format!(
+            "Der Clipbereich liegt außerhalb des Videos ({duration:.1} Sekunden).", "The selected range is outside the video ({duration:.1} seconds)."
         ));
     }
     // Exclusively reserve our destination before FFmpeg writes it. On failure only
@@ -1612,7 +1612,7 @@ pub fn trim_controlled(
         .write(true)
         .create_new(true)
         .open(output)
-        .map_err(|error| format!("Die Zieldatei konnte nicht angelegt werden: {error}"))?;
+        .map_err(|error| crate::tr_format!("Die Zieldatei konnte nicht angelegt werden: {error}", "Could not create output file: {error}"))?;
     drop(destination);
     let length = end.min(duration) - start;
     let mut export = command(ffmpeg);
@@ -1668,21 +1668,21 @@ pub fn trim_controlled(
         .args(["-movflags", "+faststart", "-f", "mp4"])
         .arg(output);
     let result = control
-        .run(&mut export, length, "Clip kodieren")
+        .run(&mut export, length, crate::i18n::text("Clip kodieren", "Encoding clip"))
         .map_err(|error| {
             let _ = fs::remove_file(output);
             error
         })?;
     if !result.status.success() {
         let _ = fs::remove_file(output);
-        return Err(format!(
-            "Der Clip konnte nicht exportiert werden. {}",
+        return Err(crate::tr_format!(
+            "Der Clip konnte nicht exportiert werden. {}", "Could not export clip. {}",
             diagnostic(&result.stderr)
         ));
     }
     if fs::metadata(output).map_or(true, |metadata| metadata.len() == 0) {
         let _ = fs::remove_file(output);
-        return Err("Der Export hat keine Videodaten erzeugt.".into());
+        return Err(crate::i18n::text("Der Export hat keine Videodaten erzeugt.", "The export produced no video data.").into());
     }
     Ok(match mode {
         TrimMode::Precise => start,
@@ -1701,7 +1701,7 @@ pub fn trim_controlled(
 /// Writes a JPEG poster frame for the library.
 pub fn make_thumbnail(ffmpeg: &Path, input: &Path, output: &Path, at: f64) -> Result<(), String> {
     if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("Vorschauordner fehlt: {error}"))?;
+        fs::create_dir_all(parent).map_err(|error| crate::tr_format!("Vorschauordner fehlt: {error}", "Preview folder is missing: {error}"))?;
     }
     let temporary = output.with_extension("tmp.jpg");
     let result = command(ffmpeg)
@@ -1728,16 +1728,16 @@ pub fn make_thumbnail(ffmpeg: &Path, input: &Path, output: &Path, at: f64) -> Re
         ])
         .arg(&temporary)
         .output()
-        .map_err(|error| format!("Vorschau fehlgeschlagen: {error}"))?;
+        .map_err(|error| crate::tr_format!("Vorschau fehlgeschlagen: {error}", "Preview failed: {error}"))?;
     if !result.status.success() || fs::metadata(&temporary).map_or(true, |m| m.len() == 0) {
         let _ = fs::remove_file(&temporary);
-        return Err(format!(
-            "Vorschau fehlgeschlagen. {}",
+        return Err(crate::tr_format!(
+            "Vorschau fehlgeschlagen. {}", "Preview failed. {}",
             diagnostic(&result.stderr)
         ));
     }
     fs::rename(&temporary, output)
-        .map_err(|error| format!("Vorschau konnte nicht gespeichert werden: {error}"))
+        .map_err(|error| crate::tr_format!("Vorschau konnte nicht gespeichert werden: {error}", "Could not save preview: {error}"))
 }
 
 #[cfg(test)]

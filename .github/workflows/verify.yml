@@ -13,37 +13,51 @@ jobs:
   media:
     uses: ./.github/workflows/media.yml
   windows:
+    needs: media
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install FFmpeg for synthetic tests
-        run: choco install ffmpeg --yes --no-progress
+      - uses: actions/download-artifact@v4
+        with:
+          name: stillclip-media
+          path: media-artifacts
+      - name: Use the shipped media tools for synthetic tests
+        shell: pwsh
+        run: |
+          Expand-Archive media-artifacts/stillclip-media-windows-x64.zip media-tools
+          (Resolve-Path media-tools).Path | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Unit and regression tests
         run: cargo test --locked
       - name: Synthetic video tests (no screen or microphone capture)
         run: cargo test --locked synthetic_ -- --ignored --nocapture
       - name: Release build
         run: cargo build --locked --release
-      - name: Package portable Windows app
+      - name: Build online and offline installers and portable package
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path dist/stillclip -Force
-          Copy-Item target/release/stillclip.exe, README.md, CREDITS.md, WINDOWS-CHECKS.md, CHANGELOG.md, CONTRIBUTING.md, MECHANICS.md, mechanics.json dist/stillclip
-          Copy-Item docs dist/stillclip/docs -Recurse
-          Compress-Archive -Path dist/stillclip/* -DestinationPath dist/stillclip-windows-x64.zip
-          $archiveHash = (Get-FileHash dist/stillclip-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$archiveHash  stillclip-windows-x64.zip`n" | Set-Content dist/SHA256SUMS.txt -Encoding ascii -NoNewline
+        run: ./packaging/build-installers.ps1
+      - name: Verify installed application, upgrade and uninstall
+        shell: pwsh
+        run: ./packaging/test-installers.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: stillclip-windows-x64
           path: |
-            dist/stillclip-windows-x64.zip
+            dist/*.exe
+            dist/*.zip
+            dist/*.xz
+            dist/*.json
             dist/SHA256SUMS.txt
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-checks
+          path: installer-checks/
+          if-no-files-found: ignore
   interface:
     runs-on: ubuntu-latest
     timeout-minutes: 10

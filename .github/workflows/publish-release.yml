@@ -20,7 +20,7 @@ jobs:
   publish:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: write
       actions: read
@@ -57,16 +57,27 @@ jobs:
           cd package
           sha256sum --check --strict SHA256SUMS.txt
           unzip -t stillclip-windows-x64.zip
+          unzip -t stillclip-media-windows-x64.zip
+          tar -tJf stillclip-media-source.tar.xz > source-files.txt
+          grep -q 'sources/ffmpeg/COPYING.GPLv3' source-files.txt
+          grep -q 'packaging/build-media.sh' source-files.txt
+          [[ "v$(jq -r .version components.json)" == "$RELEASE_TAG" ]]
+          rm source-files.txt
       - name: Upload and verify release assets
         shell: bash
         run: |
           set -euo pipefail
-          gh release upload "$RELEASE_TAG" package/stillclip-windows-x64.zip package/SHA256SUMS.txt --clobber
+          gh release upload "$RELEASE_TAG" package/* --clobber
           gh api "repos/$GH_REPO/releases/$RELEASE_ID/assets" > assets.json
           python3 - <<'PY'
           import hashlib, json, pathlib
           assets = {asset['name']: asset for asset in json.loads(pathlib.Path('assets.json').read_text())}
-          for name in ('stillclip-windows-x64.zip', 'SHA256SUMS.txt'):
+          expected = {'stillclip-windows-x64.zip', 'stillclip-setup-online-x64.exe',
+                      'stillclip-setup-offline-x64.exe', 'stillclip-media-windows-x64.zip',
+                      'stillclip-media-source.tar.xz', 'stillclip-webview2-x64.exe',
+                      'components.json', 'SHA256SUMS.txt'}
+          assert {p.name for p in pathlib.Path('package').iterdir()} == expected
+          for name in sorted(expected):
               data = (pathlib.Path('package') / name).read_bytes()
               asset = assets[name]
               assert asset['state'] == 'uploaded' and asset['size'] == len(data), name

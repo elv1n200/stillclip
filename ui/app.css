@@ -328,7 +328,7 @@ select:focus { border-color: #969696; }
 .page-heading h1::before { content: "# "; color: var(--accent); }
 .page-heading p { font-size: 12px; color: var(--muted); margin: 0; }
 .deck { position: relative; border-color: #666; background: #0d0d0d; margin-top: 10px; }
-.deck::before { content: " Aufnahme "; position: absolute; top: -12px; left: 16px; color: var(--accent); background: var(--bg); padding: 0 6px; font-size: 13px; }
+.deck::before { content: attr(aria-label); position: absolute; top: -12px; left: 16px; color: var(--accent); background: var(--bg); padding: 0 6px; font-size: 13px; }
 .deck-row { padding: 20px 16px 14px; flex-wrap: wrap; }
 .deck-foot { padding: 12px 16px; }
 .deck-timer { color: var(--muted); }

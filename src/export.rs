@@ -87,12 +87,12 @@ impl Snapshot {
             segments: Vec::new(),
         };
         for segment in segments {
-            let name = segment.path.file_name().ok_or("Segment ohne Dateinamen")?;
+            let name = segment.path.file_name().ok_or(crate::i18n::text("Segment ohne Dateinamen", "Segment has no filename"))?;
             let path = snapshot.dir.join(name);
             // Both paths are on the clip volume. FAT/exFAT needs a copy instead.
             fs::hard_link(&segment.path, &path)
                 .or_else(|_| fs::copy(&segment.path, &path).map(|_| ()))
-                .map_err(|e| format!("Aufnahmesegment konnte nicht gesichert werden: {e}"))?;
+                .map_err(|e| crate::tr_format!("Aufnahmesegment konnte nicht gesichert werden: {e}", "Could not preserve recording segment: {e}"))?;
             snapshot.segments.push(Segment {
                 path,
                 ..segment.clone()
@@ -121,7 +121,7 @@ impl Snapshot {
                 result
             }
         }
-        .map_err(|e| format!("Clip konnte nicht gespeichert werden: {e}"))
+        .map_err(|e| crate::tr_format!("Clip konnte nicht gespeichert werden: {e}", "Could not save clip: {e}"))
     }
 }
 

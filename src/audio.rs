@@ -37,9 +37,9 @@ pub enum AudioSource {
 impl AudioSource {
     pub fn label(&self) -> &'static str {
         match self {
-            AudioSource::Loopback => "Systemton",
-            AudioSource::Process { .. } => "Spielton",
-            AudioSource::Microphone { .. } => "Mikrofon",
+            AudioSource::Loopback => crate::i18n::text("Systemton", "System audio"),
+            AudioSource::Process { .. } => crate::i18n::text("Spielton", "Game audio"),
+            AudioSource::Microphone { .. } => crate::i18n::text("Mikrofon", "Microphone"),
         }
     }
 }
@@ -97,7 +97,7 @@ impl AudioPipe {
                     gain,
                 );
             })
-            .map_err(|error| format!("Der Audio-Thread konnte nicht gestartet werden: {error}"))?;
+            .map_err(|error| crate::tr_format!("Der Audio-Thread konnte nicht gestartet werden: {error}", "Could not start audio thread: {error}"))?;
         let mut pipe = AudioPipe {
             input: AudioInput {
                 path,
@@ -119,7 +119,7 @@ impl AudioPipe {
             }
             Err(_) => {
                 pipe.stop();
-                Err("Das Audiogerät hat nicht rechtzeitig geantwortet.".into())
+                Err(crate::i18n::text("Das Audiogerät hat nicht rechtzeitig geantwortet.", "The audio device did not respond in time.").into())
             }
         }
     }
@@ -297,7 +297,7 @@ mod platform {
 
     fn enumerator() -> Result<IMMDeviceEnumerator, String> {
         unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
-            .map_err(|error| format!("Die Audiogeräte sind nicht verfügbar: {error}"))
+            .map_err(|error| crate::tr_format!("Die Audiogeräte sind nicht verfügbar: {error}", "Audio devices unavailable: {error}"))
     }
 
     pub fn capture_devices() -> Vec<AudioDevice> {
@@ -317,7 +317,7 @@ mod platform {
                             devices.push(AudioDevice {
                                 id,
                                 name: if name.is_empty() {
-                                    "Mikrofon".into()
+                                    crate::i18n::text("Mikrofon", "Microphone").into()
                                 } else {
                                     name
                                 },
@@ -382,8 +382,8 @@ mod platform {
             )
         };
         if handle == INVALID_HANDLE_VALUE || handle.is_null() {
-            return Err(format!(
-                "Die Audio-Pipe konnte nicht erstellt werden (Windows-Fehler {}).",
+            return Err(crate::tr_format!(
+                "Die Audio-Pipe konnte nicht erstellt werden (Windows-Fehler {}).", "Could not create audio pipe (Windows error {}).",
                 std::io::Error::last_os_error()
             ));
         }
@@ -487,17 +487,17 @@ mod platform {
                 &callback,
             )
         }
-        .map_err(|e| format!("Spielton benötigt Windows 11 bzw. Build 20348 oder neuer: {e}"))?;
+        .map_err(|e| crate::tr_format!("Spielton benötigt Windows 11 bzw. Build 20348 oder neuer: {e}", "Game audio requires Windows 11 or build 20348 or later: {e}"))?;
         rx.recv_timeout(Duration::from_secs(8)).map_err(|_| {
-            "Windows hat die Spielton-Aufnahme nicht rechtzeitig aktiviert.".to_string()
+            crate::i18n::text("Windows hat die Spielton-Aufnahme nicht rechtzeitig aktiviert.", "Windows did not activate game audio capture in time.").to_string()
         })?;
         let mut status = HRESULT::default();
         let mut result = None;
         unsafe { operation.GetActivateResult(&mut status, &mut result) }
             .map_err(|e| e.to_string())?;
-        status.ok().map_err(|e| format!("Spielton ist für diesen Prozess nicht verfügbar (Windows Build 20348+ erforderlich): {e}"))?;
+        status.ok().map_err(|e| crate::tr_format!("Spielton ist für diesen Prozess nicht verfügbar (Windows Build 20348+ erforderlich): {e}", "Game audio is unavailable for this process (Windows build 20348+ required): {e}"))?;
         result
-            .ok_or("Windows hat keine Spielton-Schnittstelle geliefert.")?
+            .ok_or(crate::i18n::text("Windows hat keine Spielton-Schnittstelle geliefert.", "Windows did not provide a game audio interface."))?
             .cast()
             .map_err(|e| e.to_string())
     }
@@ -545,13 +545,13 @@ mod platform {
         }
         .map_err(|error| match source {
             AudioSource::Loopback => {
-                format!("Kein Wiedergabegerät für den Systemton gefunden: {error}")
+                crate::tr_format!("Kein Wiedergabegerät für den Systemton gefunden: {error}", "No output device found for system audio: {error}")
             }
-            AudioSource::Microphone { .. } => format!("Das Mikrofon wurde nicht gefunden: {error}"),
-            AudioSource::Process { .. } => format!("Spielton nicht verfügbar: {error}"),
+            AudioSource::Microphone { .. } => crate::tr_format!("Das Mikrofon wurde nicht gefunden: {error}", "Microphone not found: {error}"),
+            AudioSource::Process { .. } => crate::tr_format!("Spielton nicht verfügbar: {error}", "Game audio unavailable: {error}"),
         })?;
         let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None) }
-            .map_err(|error| format!("Das Audiogerät konnte nicht geöffnet werden: {error}"))?;
+            .map_err(|error| crate::tr_format!("Das Audiogerät konnte nicht geöffnet werden: {error}", "Could not open audio device: {error}"))?;
         initialize_stream(client, source, device_id(&device))
     }
 
@@ -576,9 +576,9 @@ mod platform {
                 None,
             )
         }
-        .map_err(|error| format!("Das Audiogerät unterstützt die Aufnahme nicht: {error}"))?;
+        .map_err(|error| crate::tr_format!("Das Audiogerät unterstützt die Aufnahme nicht: {error}", "The audio device does not support recording: {error}"))?;
         let capture: IAudioCaptureClient = unsafe { client.GetService() }
-            .map_err(|error| format!("Die Audioaufnahme ist nicht verfügbar: {error}"))?;
+            .map_err(|error| crate::tr_format!("Die Audioaufnahme ist nicht verfügbar: {error}", "Audio capture unavailable: {error}"))?;
         Ok(Stream {
             client,
             capture,
@@ -781,7 +781,7 @@ mod platform {
         _: super::Meter,
         _: f32,
     ) {
-        let _ = ready.send(Err("Audioaufnahme ist nur unter Windows verfügbar.".into()));
+        let _ = ready.send(Err(crate::i18n::text("Audioaufnahme ist nur unter Windows verfügbar.", "Audio capture is only available on Windows.").into()));
     }
     pub fn unblock(_: &str) {}
 }

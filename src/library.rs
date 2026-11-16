@@ -32,11 +32,11 @@ pub fn scan_clips(dir: &Path) -> Result<Vec<Clip>, String> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("Clip-Ordner konnte nicht gelesen werden: {error}")),
+        Err(error) => return Err(crate::tr_format!("Clip-Ordner konnte nicht gelesen werden: {error}", "Could not read clips folder: {error}")),
     };
     let mut clips = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|error| format!("Clip konnte nicht gelesen werden: {error}"))?;
+        let entry = entry.map_err(|error| crate::tr_format!("Clip konnte nicht gelesen werden: {error}", "Could not read clip: {error}"))?;
         let path = entry.path();
         if !is_video(&path) {
             continue;
@@ -158,14 +158,14 @@ fn copy_new(source: &Path, destination: &Path) -> io::Result<()> {
 pub fn import_clip(source: &Path, dir: &Path) -> Result<PathBuf, String> {
     if !source.is_file() || !is_video(source) {
         return Err(
-            "Bitte eine Videodatei im Format MP4, MKV, MOV, WebM, AVI oder M4V wählen.".into(),
+            crate::i18n::text("Bitte eine Videodatei im Format MP4, MKV, MOV, WebM, AVI oder M4V wählen.", "Choose a video in MP4, MKV, MOV, WebM, AVI, or M4V format.").into(),
         );
     }
     let filename = source
         .file_name()
-        .ok_or_else(|| "Der Dateiname fehlt.".to_string())?;
+        .ok_or_else(|| crate::i18n::text("Der Dateiname fehlt.", "The filename is missing.").to_string())?;
     fs::create_dir_all(dir)
-        .map_err(|error| format!("Clip-Ordner konnte nicht erstellt werden: {error}"))?;
+        .map_err(|error| crate::tr_format!("Clip-Ordner konnte nicht erstellt werden: {error}", "Could not create clips folder: {error}"))?;
     let stem = source.file_stem().unwrap_or_default().to_string_lossy();
     let extension = source.extension().unwrap_or_default().to_string_lossy();
     for number in 0..10_000 {
@@ -177,10 +177,10 @@ pub fn import_clip(source: &Path, dir: &Path) -> Result<PathBuf, String> {
         match copy_new(source, &destination) {
             Ok(()) => return Ok(destination),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("Clip konnte nicht importiert werden: {error}")),
+            Err(error) => return Err(crate::tr_format!("Clip konnte nicht importiert werden: {error}", "Could not import clip: {error}")),
         }
     }
-    Err("Zu viele Clips mit diesem Dateinamen vorhanden.".into())
+    Err(crate::i18n::text("Zu viele Clips mit diesem Dateinamen vorhanden.", "Too many clips already use this filename.").into())
 }
 
 fn valid_stem(name: &str) -> Result<&str, String> {
@@ -197,7 +197,7 @@ fn valid_stem(name: &str) -> Result<&str, String> {
                 )
         })
     {
-        return Err("Bitte einen gültigen Namen ohne Pfad oder Sonderzeichen eingeben.".into());
+        return Err(crate::i18n::text("Bitte einen gültigen Namen ohne Pfad oder Sonderzeichen eingeben.", "Enter a valid name without a path or special characters.").into());
     }
     let base = name.split('.').next().unwrap_or_default().trim_end();
     let upper = base.to_ascii_uppercase();
@@ -211,7 +211,7 @@ fn valid_stem(name: &str) -> Result<&str, String> {
             })
         });
     if reserved {
-        return Err("Dieser Name ist für Windows reserviert.".into());
+        return Err(crate::i18n::text("Dieser Name ist für Windows reserviert.", "This name is reserved by Windows.").into());
     }
     Ok(name)
 }
@@ -219,7 +219,7 @@ fn valid_stem(name: &str) -> Result<&str, String> {
 pub fn rename_clip(path: &Path, name: &str) -> Result<PathBuf, String> {
     let name = valid_stem(name)?;
     if !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()) {
-        return Err("Der Clip wurde nicht gefunden.".into());
+        return Err(crate::i18n::text("Der Clip wurde nicht gefunden.", "Clip not found.").into());
     }
     let mut filename = std::ffi::OsString::from(name);
     if let Some(extension) = path.extension() {
@@ -227,7 +227,7 @@ pub fn rename_clip(path: &Path, name: &str) -> Result<PathBuf, String> {
         filename.push(extension);
     }
     if filename.to_string_lossy().encode_utf16().count() > 255 {
-        return Err("Der Clip-Name ist zu lang.".into());
+        return Err(crate::i18n::text("Der Clip-Name ist zu lang.", "The clip name is too long.").into());
     }
     let destination = path.with_file_name(filename);
     if destination == path {
@@ -242,14 +242,14 @@ pub fn rename_clip(path: &Path, name: &str) -> Result<PathBuf, String> {
     };
     result.map_err(|error| {
         if error.kind() == io::ErrorKind::AlreadyExists {
-            "Ein Clip mit diesem Namen existiert bereits.".to_string()
+            crate::i18n::text("Ein Clip mit diesem Namen existiert bereits.", "A clip with this name already exists.").to_string()
         } else {
-            format!("Clip konnte nicht umbenannt werden: {error}")
+            crate::tr_format!("Clip konnte nicht umbenannt werden: {error}", "Could not rename clip: {error}")
         }
     })?;
     if let Err(error) = fs::remove_file(path) {
         let _ = fs::remove_file(&destination);
-        return Err(format!("Clip konnte nicht umbenannt werden: {error}"));
+        return Err(crate::tr_format!("Clip konnte nicht umbenannt werden: {error}", "Could not rename clip: {error}"));
     }
     Ok(destination)
 }
@@ -290,12 +290,12 @@ impl Annotation {
     pub fn normalized(game: &str, tags: &[String]) -> Result<Self, String> {
         let game = game.trim();
         if game.chars().count() > 80 || game.chars().any(char::is_control) {
-            return Err("Der Spielname darf höchstens 80 Zeichen enthalten.".into());
+            return Err(crate::i18n::text("Der Spielname darf höchstens 80 Zeichen enthalten.", "Game names must be no longer than 80 characters.").into());
         }
         let mut unique = Vec::<String>::new();
         for tag in tags.iter().map(|t| t.trim()).filter(|t| !t.is_empty()) {
             if tag.chars().count() > 32 || tag.chars().any(char::is_control) || tag.contains(',') {
-                return Err("Tags dürfen höchstens 32 Zeichen und keine Kommas enthalten.".into());
+                return Err(crate::i18n::text("Tags dürfen höchstens 32 Zeichen und keine Kommas enthalten.", "Tags must contain no commas and be no longer than 32 characters.").into());
             }
             if !unique
                 .iter()
@@ -305,7 +305,7 @@ impl Annotation {
             }
         }
         if unique.len() > 12 {
-            return Err("Pro Clip sind höchstens 12 Tags möglich.".into());
+            return Err(crate::i18n::text("Pro Clip sind höchstens 12 Tags möglich.", "A clip can have up to 12 tags.").into());
         }
         Ok(Self {
             game: game.into(),
@@ -353,7 +353,7 @@ impl Index {
             } else {
                 self.annotations.remove(&key);
             }
-            return Err(format!("Tags konnten nicht gespeichert werden: {error}"));
+            return Err(crate::tr_format!("Tags konnten nicht gespeichert werden: {error}", "Could not save tags: {error}"));
         }
         Ok(())
     }

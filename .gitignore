@@ -15,4 +15,6 @@
 /shots/now.png
 
 /.media-build/
-/dist/
+/installer-checks/
+/media-artifacts/
+/media-tools/
