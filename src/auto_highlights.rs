@@ -578,8 +578,8 @@ mod tests {
                 "language=qab",
                 "-metadata:s:a:2",
                 "language=qac",
-                "-r",
-                "30",
+                "-vf",
+                "fps=30",
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -615,6 +615,7 @@ mod tests {
         source.ffmpeg = ffmpeg.clone();
         let segments = completed(&source).unwrap();
         assert!(segments.len() >= 5);
+        assert!((segments.last().unwrap().end.unwrap() - 21.5).abs() < 0.1);
         let tail = Snapshot::new(&root, &segments).unwrap();
         // Model the recorder's final hand-off: the original ring is already gone.
         fs::remove_dir_all(&source.directory).unwrap();
