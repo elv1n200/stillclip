@@ -37,6 +37,13 @@ for spec in json.loads(manifest.read_text())['sources']:
             member.name = name
             tar.extract(member, target, filter='data')
 PY
+# A source archive has no .git directory. Pin its version explicitly so FFmpeg
+# cannot accidentally report the enclosing Stillclip repository's commit.
+python - "$recipe_dir/media-sources.json" "$work/sources/ffmpeg/FF_VERSION" <<'PYVERSION'
+import json,pathlib,sys
+spec = next(s for s in json.loads(pathlib.Path(sys.argv[1]).read_text())['sources'] if s['name'] == 'ffmpeg')
+pathlib.Path(sys.argv[2]).write_text('git-' + spec['commit'][:12] + '-stillclip\n')
+PYVERSION
 jobs=${STILLCLIP_BUILD_JOBS:-$(nproc)}
 (
   cd "$work/sources/x264"
@@ -77,6 +84,7 @@ grep -q ddagrab "$work/output/media/filters.txt"
 "$work/output/media/ffmpeg.exe" -hide_banner -encoders > "$work/output/media/encoders.txt" 2>&1
 for encoder in libx264 h264_nvenc h264_amf h264_qsv aac; do grep -q "$encoder" "$work/output/media/encoders.txt"; done
 "$work/output/media/ffmpeg.exe" -version > "$work/output/media/BUILD.txt"
+pacman -Q > "$work/output/media/BUILD-ENVIRONMENT.txt"
 cp "$recipe_dir/media-sources.json" "$work/output/media/"
 cp "$work/sources/ffmpeg/COPYING.GPLv3" "$work/output/media/licenses/FFmpeg-GPLv3.txt"
 cp "$work/sources/x264/COPYING" "$work/output/media/licenses/x264-GPLv2-or-later.txt"
@@ -96,7 +104,7 @@ TXT
 # Reject non-system runtime DLLs: the package must run without an MSYS2 install.
 for binary in "$work/output/media/ffmpeg.exe" "$work/output/media/ffprobe.exe"; do
   objdump -p "$binary" | sed -n 's/.*DLL Name: //p' > "$binary.imports.txt"
-  if grep -Ei '(libgcc|libstdc\+\+|libwinpthread|libvpl|libx264|msys-)' "$binary.imports.txt"; then exit 1; fi
+  if grep -Ei '(^lib.*\.dll$|^msys-|^zlib)' "$binary.imports.txt"; then exit 1; fi
 done
 # Include the exact sources, including the small header-only dependencies.
 mkdir -p "$work/source-bundle/packaging"
@@ -105,6 +113,7 @@ cp -R "$work/sources" "$work/source-bundle/sources"
 # x264 was built in place; remove generated objects but keep every source file.
 make -C "$work/source-bundle/sources/x264" distclean
 cp "$work/output/media/README.txt" "$work/source-bundle/README.txt"
+cp "$work/output/media/BUILD-ENVIRONMENT.txt" "$work/source-bundle/BUILD-ENVIRONMENT.txt"
 tar -C "$work/source-bundle" -cJf "$work/output/stillclip-media-source.tar.xz" .
 python - "$work/output" <<'PY'
 import pathlib,sys,zipfile

@@ -120,13 +120,13 @@ begin
     ExtractTemporaryFile('stillclip-media-windows-x64.zip');
     if RuntimeNeeded then ExtractTemporaryFile('stillclip-webview2-x64.exe');
 #endif
-    if GetSHA256OfFile(Archive) <> '{#MediaSHA256}' then RaiseException('Media checksum mismatch.');
+    if CompareText(GetSHA256OfFile(Archive), '{#MediaSHA256}') <> 0 then RaiseException('Media checksum mismatch.');
     ExtractArchive(Archive, ExpandConstant('{tmp}\media'), '', True, nil);
     if not FileExists(ExpandConstant('{tmp}\media\ffmpeg.exe')) or
        not FileExists(ExpandConstant('{tmp}\media\ffprobe.exe')) then
       RaiseException('The media package is incomplete.');
     if RuntimeNeeded then begin
-      if GetSHA256OfFile(Runtime) <> '{#RuntimeSHA256}' then RaiseException('WebView2 checksum mismatch.');
+      if CompareText(GetSHA256OfFile(Runtime), '{#RuntimeSHA256}') <> 0 then RaiseException('WebView2 checksum mismatch.');
       if not Exec(Runtime, '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
         RaiseException(CustomMessage('RuntimeFailed'));
       if (ExitCode = 3010) then NeedsRestart := True;
@@ -143,8 +143,9 @@ begin
   if CurStep = ssPostInstall then begin
     if not SaveStringToFile(ExpandConstant('{app}\installed.flag'), 'Stillclip installed application', False) then
       RaiseException('Could not write installation marker.');
-    if not SaveStringToFile(ExpandConstant('{app}\initial-language.txt'), ActiveLanguage, False) then
-      RaiseException('Could not save initial language.');
+    if not FileExists(ExpandConstant('{app}\initial-language.txt')) then
+      if not SaveStringToFile(ExpandConstant('{app}\initial-language.txt'), ActiveLanguage, False) then
+        RaiseException('Could not save initial language.');
   end;
 end;
 
