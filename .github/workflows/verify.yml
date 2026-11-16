@@ -12,15 +12,43 @@ concurrency:
 jobs:
   media:
     uses: ./.github/workflows/media.yml
-  windows:
-    needs: media
+  application:
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Unit and regression tests
+        run: cargo test --locked
+      - name: Release build
+        run: cargo build --locked --release
+      - name: Collect native executables and icon
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory native-artifacts | Out-Null
+          Copy-Item target/release/stillclip.exe native-artifacts/
+          $tests = Get-ChildItem target/debug/deps/stillclip-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (!$tests) { throw 'Native test executable is missing' }
+          Copy-Item $tests.FullName native-artifacts/stillclip-tests.exe
+          $icon = Get-ChildItem target/release/build -Filter stillclip.ico -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (!$icon) { throw 'Executable icon is missing' }
+          Copy-Item $icon.FullName native-artifacts/stillclip.ico
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stillclip-native
+          path: native-artifacts/
+          if-no-files-found: error
+  windows:
+    needs: [media, application]
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: stillclip-native
+          path: native-artifacts
       - uses: actions/download-artifact@v4
         with:
           name: stillclip-media
@@ -30,15 +58,14 @@ jobs:
         run: |
           Expand-Archive media-artifacts/stillclip-media-windows-x64.zip media-tools
           (Resolve-Path media-tools).Path | Out-File -FilePath $env:GITHUB_PATH -Append
-      - name: Unit and regression tests
-        run: cargo test --locked
       - name: Synthetic video tests (no screen or microphone capture)
-        run: cargo test --locked synthetic_ -- --ignored --nocapture
-      - name: Release build
-        run: cargo build --locked --release
+        shell: pwsh
+        run: |
+          & ./native-artifacts/stillclip-tests.exe synthetic_ --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic tests failed' }
       - name: Build online and offline installers and portable package
         shell: pwsh
-        run: ./packaging/build-installers.ps1
+        run: ./packaging/build-installers.ps1 -NativeDir native-artifacts
       - name: Verify installed application, upgrade and uninstall
         shell: pwsh
         run: ./packaging/test-installers.ps1

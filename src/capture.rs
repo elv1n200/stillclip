@@ -96,7 +96,7 @@ impl Display {
             .parse::<u32>()
             .ok();
         let base = match number {
-            Some(n) => format!("Bildschirm {n}"),
+            Some(n) => crate::tr_format!("Bildschirm {n}", "Display {n}"),
             None => self.name.clone(),
         };
         if self.primary {

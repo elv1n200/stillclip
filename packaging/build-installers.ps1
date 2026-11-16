@@ -1,4 +1,4 @@
-param([string]$MediaDir = 'media-artifacts', [string]$OutputDir = 'dist')
+param([string]$MediaDir = 'media-artifacts', [string]$OutputDir = 'dist', [string]$NativeDir = '')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 Set-Location $repo
@@ -6,10 +6,11 @@ $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matc
 $stage = Join-Path $OutputDir 'installer'
 $payload = Join-Path $stage 'payload'
 New-Item -ItemType Directory -Force $payload | Out-Null
-Copy-Item target/release/stillclip.exe, README.md, CREDITS.md, WINDOWS-CHECKS.md, CHANGELOG.md, CONTRIBUTING.md, MECHANICS.md, mechanics.json $payload
+$binary = if ($NativeDir) { Join-Path $NativeDir 'stillclip.exe' } else { 'target/release/stillclip.exe' }
+Copy-Item $binary, README.md, CREDITS.md, WINDOWS-CHECKS.md, CHANGELOG.md, CONTRIBUTING.md, MECHANICS.md, mechanics.json $payload
 Copy-Item docs (Join-Path $payload 'docs') -Recurse -Force
 Copy-Item packaging/THIRD-PARTY.txt $payload
-$icon = Get-ChildItem target/release/build -Filter stillclip.ico -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$icon = if ($NativeDir) { Get-Item (Join-Path $NativeDir 'stillclip.ico') } else { Get-ChildItem target/release/build -Filter stillclip.ico -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
 if (!$icon) { throw 'Executable icon was not generated' }
 Copy-Item $icon.FullName (Join-Path $payload 'stillclip.ico')
 Copy-Item (Join-Path $MediaDir 'stillclip-media-windows-x64.zip') $stage

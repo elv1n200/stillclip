@@ -255,6 +255,8 @@ const fs = require('node:fs/promises');
     await page.click('#nav-library'); await page.click('#reset-filters'); await page.fill('#search', '');
     assert.match(await page.locator('.clip-card').textContent(), /Bibliothek/);
     assert.equal(await page.locator('#search').getAttribute('placeholder'), 'Search');
+    assert.equal(await page.locator('#record-card').evaluate(el => getComputedStyle(el, '::before').content), '"Recording"');
+    assert.equal((await page.locator('.card-drag').textContent()).trim(), '↗ Drag');
     await page.locator('.clip-card').click();
     await page.waitForFunction(() => document.getElementById('editor-video').readyState >= 2);
     assert.equal(await page.locator('#editor-title').textContent(), 'Bibliothek');
