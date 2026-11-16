@@ -137,11 +137,14 @@ mod tests {
             DragQueryFileW(drop, 0, Some(&mut actual));
             ReleaseStgMedium(&mut medium);
         }
+        let actual =
+            std::path::PathBuf::from(String::from_utf16(&actual[..length as usize]).unwrap());
+        // The shell expands 8.3 names (e.g. RUNNER~1) to their long spelling.
+        let actual_file = actual.canonicalize().unwrap();
+        let expected_file = path.canonicalize().unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(count, 1);
-        assert_eq!(
-            String::from_utf16(&actual[..length as usize]).unwrap(),
-            path.to_string_lossy()
-        );
+        assert_eq!(actual.file_name(), path.file_name());
+        assert_eq!(actual_file, expected_file);
     }
 }
