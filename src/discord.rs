@@ -208,7 +208,7 @@ fn export_with_limit(
                     ])
                     .arg(&staged);
             }
-            let result = encode.output().map_err(|error| {
+            let result = crate::capture::run_output(encode).map_err(|error| {
                 format!("Discord-Export konnte nicht gestartet werden: {error}")
             })?;
             if !result.status.success() {

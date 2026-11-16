@@ -31,6 +31,11 @@ Puffer wiederherzustellen oder zu löschen.
   über die EXE hinzufügen. Startet ein erkanntes Spiel, beginnt die Aufnahme von
   selbst und endet mit dem Spiel wieder. Clips tragen den Spielnamen, zum
   Beispiel `Counter-Strike 2 2026-11-14 21-04-10.mp4`.
+- **Spieleprofile.** Pro Spiel eigene Auflösung, FPS, Rückblicklänge, Ton,
+  Mikrofon und Aufnahmequelle einstellen. Das Profil wird beim nächsten Start
+  des erkannten Spiels beziehungsweise für das gewählte Zielprogramm angewandt.
+  Die allgemeinen Einstellungen werden nicht überschrieben. Profile sind
+  während einer laufenden Aufnahme gesperrt.
 - **Rückblick ohne Lücke.** Die Aufnahme läuft als Ring aus kurzen
   MPEG-TS-Segmenten. Beim Sichern werden nur die passenden Segmente
   zusammengesetzt und am nächsten Keyframe geschnitten – nichts wird neu
@@ -45,6 +50,12 @@ Puffer wiederherzustellen oder zu löschen.
 - **Der richtige Bildschirm.** Läuft das erkannte Spiel auf einem anderen
   Monitor als dem eingestellten, nimmt Stillclip diesen auf. Das Banner
   erscheint auf demselben Bildschirm.
+- **Nur das Spielfenster.** Unter Aufnahme die Fensterquelle und gegebenenfalls
+  ein laufendes Zielprogramm wählen. Ein erkanntes Spiel hat Vorrang.
+  Windows Graphics Capture nimmt genau dieses Fenster auf; auch ein
+  Encoder-Fallback bleibt an das Fenster gebunden. Beim Minimieren oder
+  Schließen endet die Aufnahme. Benötigt eine FFmpeg-Version mit dem Filter
+  `gfxcapture` und dessen `hwnd`-Option; Stillclip prüft die Unterstützung.
 - **Zwei Längen.** Neben der normalen Cliplänge lässt sich eine zweite,
   längere einstellen – mit eigener Taste, zum Beispiel 30 Sekunden für den
   Treffer und fünf Minuten für die ganze Runde.
@@ -63,6 +74,12 @@ Puffer wiederherzustellen oder zu löschen.
   Lautstärke von 0 bis 200 Prozent. Wechselt das Wiedergabegerät mitten in der
   Aufnahme, folgt Stillclip automatisch. Das Mikrofon kann zusätzlich als
   eigene zweite Tonspur mitlaufen.
+- **Nur Spielton.** Die Tonquelle kann auf das Zielprogramm samt Unterprozessen
+  beschränkt werden. Andere Programme wie Discord oder Spotify werden dabei
+  nicht über den Systemmix aufgenommen. Das Mikrofon lässt sich weiterhin
+  zumischen. Benötigt Windows 11 oder Windows Build 20348+. Falls die
+  Prozessaufnahme fehlschlägt, meldet Stillclip den Fehler und startet nicht
+  ersatzweise mit dem gesamten Systemton.
 - **Speicherplatz.** Stillclip beendet die Aufnahme, bevor das Laufwerk
   volläuft, und kann auf Wunsch die ältesten Clips löschen, sobald der Ordner
   eine eingestellte Größe überschreitet.
@@ -82,10 +99,25 @@ Puffer wiederherzustellen oder zu löschen.
   Windows (Run-Eintrag des Benutzerkontos).
 - **Bibliothek.** Vorschaubilder, Länge, Auflösung, Tonanzeige, Suche und
   Sortierung; Kontextmenü mit Öffnen, Standardplayer, Explorer und Papierkorb.
+- **Favoriten.** Der Stern am Clip schützt ihn vor automatischem Aufräumen.
+  Ein Filter zeigt nur Favoriten. Der Status bleibt beim Neustart und beim
+  Umbenennen erhalten; manuelles Löschen ist weiterhin möglich. Geschützte
+  Clips und der neueste Clip können dazu führen, dass das Ordnerlimit nicht
+  erreicht wird. Die Prüfung des freien Laufwerksplatzes bleibt aktiv.
 - **Editor.** Zeitleiste mit ziehbaren Start-/Endmarken, markierten Momenten,
   Abspielposition, Bildschritte, Schleife der Auswahl, Tastatur (Leertaste,
   I/O, Pfeiltasten, L, M, Entf). Export präzise (neu kodiert) oder schnell
   (ohne Neukodierung).
+- **Highlights.** Im Editor Ausschnitte sammeln, weitere Clips öffnen und die
+  Liste mit den Pfeilen sortieren. Bis zu 20 Ausschnitte und 30 Minuten werden
+  zu einem neuen Video mit 1080p/60 FPS und einer Stereospur verbunden. Andere
+  Seitenverhältnisse erhalten Balken, fehlender Ton wird durch Stille ergänzt.
+  Markierungen wandern mit. Die Liste ist ein Entwurf bis zum Schließen der
+  App. Auch Discord-Export ist möglich; dabei kann die Auflösung sinken.
+- **Aufnahmediagnose.** Unter der Aufnahmekarte stehen gemessene Encoder-FPS,
+  verworfene/duplizierte Bilder, Zeitrückstand, Puffer und freier Speicher.
+  Fehlende Messwerte erscheinen als unbekannt. Die FPS sind keine Spiel-FPS;
+  die Anzeige weist auf ausbleibende oder deutlich verspätete Bilder hin.
 - **Discord-Export.** Im Editor unter **Export** zwischen **Discord ohne Nitro
   · 20 MB** und **Discord Nitro · 1 GB** wählen. Stillclip passt Bitrate,
   Auflösung und Bildrate an die Länge des ausgewählten Bereichs an (bis
@@ -181,10 +213,11 @@ beenden. Spiele, Tastenkürzel, Ordnerlimit und Verhalten bleiben anpassbar.
   wird entsprechend später erkannt.
 - Das Mischen von Systemton und Mikrofon erfolgt in eine gemeinsame Tonspur;
   die optionale zweite Spur enthält nur das Mikrofon.
-- Kein Fenster- oder Spielmodus: Aufgenommen wird immer ein ganzer Bildschirm.
-  Startet ein erkanntes Spiel auf einem anderen Monitor, wechselt Stillclip
-  dorthin, aber erst beim Start der Aufnahme – ein Fensterwechsel während einer
-  laufenden Aufnahme ändert den Bildschirm nicht.
+- Die Bildschirmquelle nimmt den ganzen gewählten Monitor auf. Der automatische
+  Monitorwechsel erfolgt nur beim Start. Die Fensterquelle benötigt passende
+  Windows-/FFmpeg-Unterstützung; minimierte Fenster und exklusives Vollbild
+  können keine verwendbaren Bilder liefern. Es gibt keine Eingriffe in das
+  Spiel oder einen Grafik-Hook.
 - Markierungen im fertigen Clip merkt sich Stillclip im Medienindex neben der
   Clipdatei, nicht in der Datei selbst. Beim Umbenennen und beim Zuschneiden
   wandern sie mit; wer den Clip außerhalb von Stillclip verschiebt oder
@@ -251,6 +284,8 @@ Symbol im Infobereich.
 | `src/lifecycle.rs` | Getestete Start-/Stopp-Anforderungen während Aufnahmewechseln |
 | `src/export.rs` | Unabhängige Exporte mit gesicherten Segmenten und geschützter Veröffentlichung |
 | `src/discord.rs` | Discord-Dateilimits, Bitratenplanung, zweistufiger MP4-Export und Größenprüfung |
+| `src/highlights.rs` | Mehrere Ausschnitte vereinheitlichen, verbinden und als Highlight exportieren |
+| `src/diagnostics.rs` | Begrenztes Lesen und Auswerten vollständiger FFmpeg-Fortschrittsmeldungen |
 | `src/games.rs` | Spieleliste, Fenster-/Prozess-Erkennung, Watcher-Thread |
 | `src/capture.rs` | Bildschirme (DXGI), Encoder-Erkennung, FFmpeg-Kommandozeile |
 | `src/audio.rs` | WASAPI-Aufnahme (Loopback/Mikrofon) in Named Pipes, Gerätewechsel |
@@ -282,3 +317,9 @@ Optional verwendet `CHROME_BIN` ein vorhandenes Chromium. Mit
 Die Screenshots zeigen Browser-Vorschauen mit Testdaten.
 Die Browserprüfung ersetzt keinen Windows-Test von WASAPI, Grafikkartentreibern
 oder exklusiven Vollbildspielen.
+
+Die manuellen Prüfungen für Fensteraufnahme, Spielton und Spieleprofile stehen
+in [WINDOWS-CHECKS.md](WINDOWS-CHECKS.md). Für FFmpeg sind aktuelle Windows-Builds
+über die [offizielle Downloadseite](https://ffmpeg.org/download.html) verfügbar;
+die Liste in **Videoverarbeitung** und die Meldung unter **Aufnahmequelle**
+zeigen, welche Funktionen die ausgewählte Datei unterstützt.

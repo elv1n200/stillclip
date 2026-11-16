@@ -4,10 +4,12 @@
 
 mod audio;
 mod capture;
+mod diagnostics;
 mod discord;
 mod encoding;
 mod export;
 mod games;
+mod highlights;
 mod icon;
 mod library;
 mod lifecycle;
@@ -110,6 +112,7 @@ struct Notice {
 struct App {
     config: PathBuf,
     settings: Settings,
+    session_settings: Option<Settings>,
     ffmpeg: Option<PathBuf>,
     recorder: Option<Recorder>,
     clips: Vec<(u64, Clip)>,
@@ -190,6 +193,7 @@ impl App {
             index: Index::load(&config),
             config,
             settings,
+            session_settings: None,
             ffmpeg,
             recorder,
             clips: Vec::new(),
@@ -248,6 +252,14 @@ impl App {
             })
             .unwrap_or(self.settings.display.as_str());
         capture::choose_display(&self.displays, wanted)
+    }
+
+    fn runtime_settings(&self) -> &Settings {
+        if self.recording || self.capture.transitioning {
+            self.session_settings.as_ref().unwrap_or(&self.settings)
+        } else {
+            &self.settings
+        }
     }
 
     fn thumbnail_dir(&self) -> PathBuf {
@@ -318,10 +330,12 @@ impl App {
     /// Deletes the oldest clips when the folder outgrew its limit. Only runs
     /// when the user set one; the newest clip always survives.
     fn enforce_storage_limit(&mut self, clips: &mut Vec<Clip>) {
-        let (count, freed, failed) =
-            library::clean_limit(clips, self.settings.storage_limit_bytes(), |path| {
-                fs::remove_file(path)
-            });
+        let (count, freed, failed) = library::clean_limit_except(
+            clips,
+            self.settings.storage_limit_bytes(),
+            &self.index.favorites,
+            |path| fs::remove_file(path),
+        );
         if count == 0 {
             if failed > 0 {
                 self.notify(
@@ -497,6 +511,7 @@ impl App {
             "audio": entry.map(|e| e.info.audio),
             // Marked moments are kept by path, so they show before the clip is indexed.
             "markers": self.markers_of(&clip.path),
+            "favorite": self.index.favorites.contains(&library::index_key(&clip.path)),
             "pending": entry.is_none(),
             "path": clip.path,
         })
@@ -539,6 +554,15 @@ impl App {
             "ffmpeg_path": self.ffmpeg,
             "clips_dir": self.settings.clips_dir,
             "settings": self.settings,
+            "runtime_settings": {
+                "quality": self.runtime_settings().quality,
+                "fps": self.runtime_settings().fps,
+                "replay_seconds": self.runtime_settings().replay_seconds,
+                "microphone": self.runtime_settings().microphone,
+                "system_audio": self.runtime_settings().system_audio,
+                "capture_window": self.runtime_settings().capture_window,
+                "game_audio": self.runtime_settings().game_audio,
+            },
             "autostart": self.autostart,
             "active_game": self.active_game,
             "active_game_display": self.active_game_display,
@@ -552,11 +576,13 @@ impl App {
             "capabilities": {
                 "probed": self.capabilities.probed,
                 "ddagrab": self.capabilities.ddagrab,
+                "gfxcapture": self.capabilities.gfxcapture,
                 "encoders": self.capabilities.encoders.iter().map(|e| e.id()).collect::<Vec<_>>(),
             },
             "encoders": encoders,
             "selected_encoder": selected_encoder.label(),
             "session": self.session,
+            "diagnostics": self.recorder.as_ref().and_then(|r| r.diagnostics()),
             "markers": self.marker_json(),
             "buffer_bytes": self.buffer_bytes,
             "free_bytes": self.free_bytes,
@@ -620,32 +646,57 @@ impl App {
             .ok_or_else(|| "Der Clip ist nicht mehr in der Bibliothek. Bitte aktualisieren.".into())
     }
 
-    fn session_config(&self) -> Result<SessionConfig, String> {
-        let display = self
+    fn session_config(&mut self) -> Result<SessionConfig, String> {
+        let exe = self
+            .active_game
+            .as_ref()
+            .map(|g| g.exe.as_str())
+            .unwrap_or(&self.settings.target_exe);
+        let settings = self.settings.for_game(exe);
+        let mut display = self
             .capture_display()
             .cloned()
             .ok_or("Es wurde kein Bildschirm gefunden.")?;
-        Ok(SessionConfig {
+        let target = if settings.capture_window || (settings.system_audio && settings.game_audio) {
+            Some(games::visible_apps().into_iter().find(|app| self.active_game.as_ref().map_or(app.exe == settings.target_exe, |game| game.matches(app)))
+                .ok_or("Starte das Spiel oder wähle unter Aufnahme ein laufendes Zielprogramm aus.")?)
+        } else {
+            None
+        };
+        if settings.capture_window {
+            let window = target.as_ref().ok_or("Kein Aufnahmefenster gewählt.")?;
+            let (w, h) = games::window_size(window.hwnd, window.pid)
+                .ok_or("Das Aufnahmefenster ist geschlossen oder minimiert.")?;
+            display.width = w;
+            display.height = h;
+        }
+        let config = SessionConfig {
+            window: target.clone().filter(|_| settings.capture_window),
+            audio_process: target
+                .as_ref()
+                .filter(|_| settings.system_audio && settings.game_audio)
+                .map(|app| app.pid),
             display,
             encoder: capture::select_encoder(self.settings.encoder, &self.capabilities.encoders),
             capabilities: self.capabilities.clone(),
-            fps: self.settings.fps,
-            quality: self.settings.quality,
+            fps: settings.fps,
+            quality: settings.quality,
             show_cursor: self.settings.show_cursor,
-            system_audio: self.settings.system_audio,
-            microphone: self
-                .settings
+            system_audio: settings.system_audio,
+            microphone: settings
                 .microphone
                 .then(|| self.settings.microphone_device.clone()),
             microphone_separate_track: self.settings.microphone_separate_track,
             system_gain: settings::gain(self.settings.system_volume),
             microphone_gain: settings::gain(self.settings.microphone_volume),
-            replay_seconds: self.settings.buffer_seconds(),
+            replay_seconds: settings.buffer_seconds(),
             keep_full_session: self.settings.keep_full_session,
             min_free_bytes: self.settings.min_free_bytes(),
             precise_clips: self.settings.precise_clips,
             clips_dir: self.settings.clips_dir.clone(),
-        })
+        };
+        self.session_settings = Some(settings);
+        Ok(config)
     }
 
     fn recording_job(&mut self, action: &str, proxy: EventLoopProxy<AppEvent>) {
@@ -660,7 +711,7 @@ impl App {
         let seconds = if action == "replay_long" && self.settings.replay_seconds_long > 0 {
             self.settings.replay_seconds_long
         } else {
-            self.settings.replay_seconds
+            self.runtime_settings().replay_seconds
         };
         let prefix = self.clip_prefix();
         let export = self
@@ -873,8 +924,8 @@ impl App {
     fn handle_issue(&mut self, issue: recorder::PollIssue, proxy: EventLoopProxy<AppEvent>) {
         self.message(Err(issue.message.clone()));
         self.notify(&issue.message, true, None);
-        if issue.low_disk {
-            self.banner("Speicherplatz knapp – Aufnahme wird beendet", true);
+        if issue.stop_requested {
+            self.banner("Aufnahme wird beendet", true);
             if self.recording {
                 self.auto_started = false;
                 self.recording_job("stop", proxy);
@@ -1205,6 +1256,60 @@ impl App {
                 }
                 Err(error) => self.message(Err(error)),
             },
+            "highlights" => {
+                let result = command["pieces"]
+                    .as_array()
+                    .ok_or("Wähle zuerst Ausschnitte aus.".to_string())
+                    .and_then(|items| {
+                        if items.is_empty() || items.len() > highlights::MAX_PIECES {
+                            return Err("Ein Highlight darf 1 bis 20 Ausschnitte enthalten.".into());
+                        }
+                        items
+                            .iter()
+                            .map(|item| {
+                                let path = self.clip_path(item)?;
+                                Ok(highlights::Piece {
+                                    markers: self.markers_of(&path),
+                                    path,
+                                    start: item["start"].as_f64().unwrap_or(f64::NAN),
+                                    end: item["end"].as_f64().unwrap_or(f64::NAN),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, String>>()
+                    });
+                match (result, self.ffmpeg.clone()) {
+                    (Ok(pieces), Some(ffmpeg)) => {
+                        let profile = discord::Profile::from_id(
+                            command["mode"].as_str().unwrap_or("precise"),
+                        );
+                        let output = unique_trim_path(
+                            &self.settings.clips_dir,
+                            "Highlights",
+                            profile.map_or("Mix", |p| p.suffix()),
+                        );
+                        let events = proxy.clone();
+                        self.file_job(proxy, "Dein Highlight-Clip wird zusammengestellt…", move || {
+                            let markers = highlights::export(&ffmpeg, &pieces, &output, profile)?;
+                            let _ = events.send_event(AppEvent::ClipMarkers(output.clone(), markers));
+                            Ok(JobOutcome { message: "Highlight-Clip gespeichert. Die Originale bleiben erhalten.".into(), saved: Some(output), session: None, replay: false })
+                        });
+                    }
+                    (Err(error), _) => self.message(Err(error)),
+                    (_, None) => self.message(Err("Bitte zuerst FFmpeg auswählen.".into())),
+                }
+            }
+            "favorite" => match self.clip_path(&command) {
+                Ok(path) => {
+                    let key = library::index_key(&path);
+                    if command["favorite"].as_bool().unwrap_or(false) {
+                        self.index.favorites.insert(key);
+                    } else {
+                        self.index.favorites.remove(&key);
+                    }
+                    self.index.save(&self.config);
+                }
+                Err(error) => self.message(Err(error)),
+            },
             "trim" => match (self.clip_path(&command), self.ffmpeg.clone()) {
                 (Ok(path), Some(ffmpeg)) => {
                     let start = command["start"].as_f64().unwrap_or(f64::NAN);
@@ -1322,6 +1427,7 @@ impl App {
         // Markers belong to one session: once it ends, the buffer behind them
         // is gone, so they go with it.
         if !self.recording && !self.capture.transitioning && !self.capture.wants_start() {
+            self.session_settings = None;
             self.markers.clear();
             self.buffered = None;
         }
@@ -1332,6 +1438,10 @@ impl App {
                 }
                 // A renamed clip keeps its marked moments under the new name.
                 if let (Some(old), Some(path)) = (renamed, outcome.saved.as_ref()) {
+                    if self.index.favorites.remove(&old) {
+                        self.index.favorites.insert(library::index_key(path));
+                        self.index.save(&self.config);
+                    }
                     let moved = self
                         .index
                         .entries

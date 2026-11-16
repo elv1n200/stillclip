@@ -318,6 +318,35 @@ where
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
+pub struct GameProfile {
+    pub exe: String,
+    #[serde(deserialize_with = "lenient")]
+    pub quality: Quality,
+    pub fps: u32,
+    pub replay_seconds: u32,
+    pub microphone: bool,
+    pub system_audio: bool,
+    pub capture_window: bool,
+    pub game_audio: bool,
+}
+
+impl Default for GameProfile {
+    fn default() -> Self {
+        Self {
+            exe: String::new(),
+            quality: Quality::P1080,
+            fps: 60,
+            replay_seconds: 30,
+            microphone: false,
+            system_audio: true,
+            capture_window: false,
+            game_audio: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
 pub struct Settings {
     pub clips_dir: PathBuf,
     pub replay_seconds: u32,
@@ -372,6 +401,12 @@ pub struct Settings {
     pub auto_record_games: bool,
     pub builtin_games: bool,
     pub custom_games: Vec<GameEntry>,
+    #[serde(deserialize_with = "lenient")]
+    pub game_profiles: Vec<GameProfile>,
+    pub capture_window: bool,
+    pub game_audio: bool,
+    /// Manual target when no watched game is active. Only an executable name.
+    pub target_exe: String,
 }
 
 impl Default for Settings {
@@ -410,14 +445,37 @@ impl Default for Settings {
             auto_record_games: true,
             builtin_games: true,
             custom_games: Vec::new(),
+            game_profiles: Vec::new(),
+            capture_window: false,
+            game_audio: false,
+            target_exe: String::new(),
         }
     }
 }
 
 impl Settings {
+    pub fn for_game(&self, exe: &str) -> Self {
+        let mut effective = self.clone();
+        let exe = crate::games::normalize_exe(exe);
+        if let Some(profile) = self.game_profiles.iter().find(|p| p.exe == exe) {
+            effective.quality = profile.quality;
+            effective.fps = profile.fps;
+            effective.replay_seconds = profile.replay_seconds;
+            effective.microphone = profile.microphone;
+            effective.system_audio = profile.system_audio;
+            effective.capture_window = profile.capture_window;
+            effective.game_audio = profile.game_audio;
+        }
+        effective
+    }
+
     /// Values captured by a running session. Keep UI and backend lock policy in sync.
     pub fn capture_changed(&self, next: &Self) -> bool {
         self.clips_dir != next.clips_dir
+            || self.game_profiles != next.game_profiles
+            || self.capture_window != next.capture_window
+            || self.game_audio != next.game_audio
+            || self.target_exe != next.target_exe
             || self.fps != next.fps
             || self.quality != next.quality
             || self.encoder != next.encoder
@@ -487,6 +545,14 @@ impl Settings {
             }
         }
         self.custom_games = games;
+        let mut seen = std::collections::HashSet::new();
+        self.game_profiles.retain_mut(|profile| {
+            profile.exe = crate::games::normalize_exe(&profile.exe);
+            profile.fps = mechanics::fps(u64::from(profile.fps));
+            profile.replay_seconds = mechanics::replay_seconds(u64::from(profile.replay_seconds));
+            !profile.exe.is_empty() && seen.insert(profile.exe.clone())
+        });
+        self.target_exe = crate::games::normalize_exe(&self.target_exe);
         self
     }
 
@@ -647,6 +713,36 @@ mod tests {
         let loaded = load_settings(&directory.0);
         assert_eq!(loaded.replay_seconds, 15);
         assert_eq!(loaded.fps, 60);
+    }
+
+    #[test]
+    fn profiles_are_normalized_persistent_and_do_not_change_global_defaults() {
+        let mut settings = Settings::default();
+        settings.game_profiles.push(GameProfile {
+            exe: "VALORANT-Win64-Shipping.EXE".into(),
+            quality: Quality::P1080,
+            fps: 120,
+            replay_seconds: 60,
+            microphone: true,
+            capture_window: true,
+            game_audio: true,
+            system_audio: true,
+        });
+        let settings = settings.sanitized();
+        let effective = settings.for_game("valorant-win64-shipping.exe");
+        assert_eq!((effective.fps, effective.replay_seconds), (120, 60));
+        assert!(effective.capture_window && effective.game_audio && effective.microphone);
+        assert_eq!(settings.quality, Quality::P720);
+        assert_eq!(settings.replay_seconds, 30);
+        assert_eq!(settings.for_game("missing.exe"), settings);
+        let dir = TestDir::new();
+        save_settings(&dir.0, &settings).unwrap();
+        assert_eq!(load_settings(&dir.0), settings);
+        let mut changed = settings.clone();
+        changed.game_profiles[0].fps = 60;
+        assert!(settings.capture_changed(&changed));
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.game_profiles.is_empty());
     }
 
     #[test]

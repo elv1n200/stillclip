@@ -70,7 +70,16 @@ pub fn scan_clips(dir: &Path) -> Result<Vec<Clip>, String> {
 /// The oldest clips that have to go so the folder fits into `limit_bytes`.
 /// A limit of zero switches the cap off, and the newest clip is never on the
 /// list – a limit smaller than a single clip must not empty the folder.
+#[cfg(test)]
 pub fn over_limit(clips: &[Clip], limit_bytes: u64) -> Vec<Clip> {
+    over_limit_except(clips, limit_bytes, &std::collections::HashSet::new())
+}
+
+fn over_limit_except(
+    clips: &[Clip],
+    limit_bytes: u64,
+    protected: &std::collections::HashSet<String>,
+) -> Vec<Clip> {
     if limit_bytes == 0 || clips.len() < 2 {
         return Vec::new();
     }
@@ -83,6 +92,9 @@ pub fn over_limit(clips: &[Clip], limit_bytes: u64) -> Vec<Clip> {
     oldest.pop();
     let mut doomed = Vec::new();
     for clip in oldest {
+        if protected.contains(&index_key(&clip.path)) {
+            continue;
+        }
         if total <= limit_bytes {
             break;
         }
@@ -93,15 +105,30 @@ pub fn over_limit(clips: &[Clip], limit_bytes: u64) -> Vec<Clip> {
 }
 
 /// Keep failed deletions in the library so their index and markers survive.
+#[cfg(test)]
 pub fn clean_limit(
     clips: &mut Vec<Clip>,
     limit_bytes: u64,
+    remove: impl FnMut(&Path) -> io::Result<()>,
+) -> (usize, u64, usize) {
+    clean_limit_except(
+        clips,
+        limit_bytes,
+        &std::collections::HashSet::new(),
+        remove,
+    )
+}
+
+pub fn clean_limit_except(
+    clips: &mut Vec<Clip>,
+    limit_bytes: u64,
+    protected: &std::collections::HashSet<String>,
     mut remove: impl FnMut(&Path) -> io::Result<()>,
 ) -> (usize, u64, usize) {
     let mut removed = Vec::new();
     let mut freed = 0;
     let mut failed = 0;
-    for clip in over_limit(clips, limit_bytes) {
+    for clip in over_limit_except(clips, limit_bytes, protected) {
         if remove(&clip.path).is_ok() {
             freed += clip.bytes;
             removed.push(clip.path);
@@ -245,6 +272,8 @@ pub struct IndexEntry {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Index {
     pub entries: HashMap<String, IndexEntry>,
+    #[serde(default)]
+    pub favorites: std::collections::HashSet<String>,
 }
 
 pub fn index_key(path: &Path) -> String {
@@ -284,6 +313,7 @@ impl Index {
     pub fn prune(&mut self, clips: &[Clip], thumbnail_dir: &Path) {
         let keep: std::collections::HashSet<String> =
             clips.iter().map(|c| index_key(&c.path)).collect();
+        self.favorites.retain(|key| keep.contains(key));
         let stale: Vec<String> = self
             .entries
             .keys()
@@ -373,6 +403,36 @@ mod tests {
         assert_eq!((count, failed, clips.len()), (1, 1, 2));
         index.prune(&clips, Path::new("unused-thumbnails"));
         assert_eq!(index.entries[&locked].markers, vec![2.5]);
+    }
+
+    #[test]
+    fn favorites_survive_cleanup_and_round_trip_without_blocking_other_deletions() {
+        let mut clips = vec![
+            clip("favorite", 2, 4),
+            clip("old", 2, 3),
+            clip("middle", 2, 2),
+            clip("new", 2, 1),
+        ];
+        let favorite = index_key(&clips[0].path);
+        let mut index = Index::default();
+        index.favorites.insert(favorite.clone());
+        let (count, _, failed) = clean_limit_except(
+            &mut clips,
+            4 * 1024 * 1024 * 1024,
+            &index.favorites,
+            |path| {
+                assert_ne!(index_key(path), favorite);
+                Ok(())
+            },
+        );
+        assert_eq!((count, failed), (2, 0));
+        assert_eq!(clips.len(), 2);
+        index.prune(&clips, Path::new("unused"));
+        let dir = TestDir::new();
+        index.save(&dir.0);
+        assert!(Index::load(&dir.0).favorites.contains(&favorite));
+        let legacy: Index = serde_json::from_str("{\"entries\":{}}").unwrap();
+        assert!(legacy.favorites.is_empty());
     }
 
     #[test]

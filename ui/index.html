@@ -93,12 +93,14 @@
           </div>
           <div class="markers" id="markers" hidden></div>
           <div class="session-warnings" id="session-warnings" hidden></div>
+          <details class="diagnostics"><summary>Aufnahmediagnose</summary><div id="diagnostic-values" class="diagnostic-values"></div><p class="setting-help" id="diagnostic-health"></p></details>
         </section>
 
         <section aria-labelledby="library-heading">
           <div class="toolbar">
             <h2 id="library-heading">Clips</h2>
             <span class="library-count" id="library-count">0</span>
+            <label class="favorite-filter"><input type="checkbox" id="favorites-only"> Nur Favoriten</label>
             <div class="search-wrap"><svg aria-hidden="true"><use href="#i-search"/></svg><input class="search" id="search" type="search" aria-label="Clips durchsuchen" placeholder="Suchen" autocomplete="off"></div>
             <select id="sort" aria-label="Clips sortieren"><option value="newest">Neueste zuerst</option><option value="oldest">Älteste zuerst</option><option value="name">Name A–Z</option><option value="size">Größte zuerst</option><option value="longest">Längste zuerst</option></select>
             <span class="toolbar-gap"></span>
@@ -141,8 +143,26 @@
         </div>
 
         <div class="settings-card">
+          <div class="settings-card-heading"><div><h2>Spieleprofile</h2><p>Eigene Aufnahmevorgaben je Spiel.</p></div></div>
+          <div class="settings-body profile-form">
+            <label>Spiel<select id="profile-game" aria-label="Spielprofil"></select></label>
+            <label>Auflösung<select id="profile-quality"><option value="p720">720p</option><option value="p1080">1080p</option><option value="p1440">1440p</option><option value="native">Nativ</option></select></label>
+            <label>Bildrate<select id="profile-fps"></select></label>
+            <label>Rückblick (s)<input class="input" id="profile-replay" type="number" min="15" max="1200" step="1"></label>
+            <label><input id="profile-microphone" type="checkbox"> Mikrofon</label>
+            <label><input id="profile-system-audio" type="checkbox"> Spiel-/Systemton aufnehmen</label>
+            <label><input id="profile-window" type="checkbox"> Nur Spielfenster</label>
+            <label><input id="profile-audio" type="checkbox"> Nur Spielton</label>
+            <button class="btn" id="profile-save">Profil übernehmen</button><button class="btn" id="profile-remove">Profil entfernen</button>
+            <p class="setting-help" id="profile-status"></p>
+          </div>
+        </div>
+
+        <div class="settings-card">
           <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-monitor"/></svg></div><div><h2>Aufnahme</h2><p>Bildschirm, Qualität, Encoder.</p></div></div>
           <div class="settings-body">
+            <div class="setting-row"><div><div class="setting-label">Aufnahmequelle</div><div class="setting-help" id="window-support">Fensteraufnahme benötigt FFmpeg mit Windows Graphics Capture. Beim Minimieren endet die Aufnahme.</div></div><select id="setting-capture-window" aria-label="Aufnahmequelle"><option value="false">Ganzer Bildschirm</option><option value="true">Nur Spielfenster</option></select></div>
+            <div class="setting-row"><div><div class="setting-label">Zielprogramm</div><div class="setting-help">Für Fensteraufnahme und Spielton. Ein automatisch erkanntes Spiel hat Vorrang.</div></div><select id="setting-target" aria-label="Zielprogramm"></select></div>
             <div class="setting-row"><div><div class="setting-label">Bildschirm</div><div class="setting-help" id="display-help">Dieser Bildschirm wird aufgenommen.</div></div><select id="setting-display" aria-label="Bildschirm"></select></div>
             <div class="setting-row"><div><div class="setting-label">Bildschirm des Spiels verwenden</div><div class="setting-help">Läuft ein erkanntes Spiel auf einem anderen Monitor, nimmt Stillclip diesen auf statt den oben gewählten.</div></div><label class="switch"><input type="checkbox" id="setting-follow-display"><span class="slider"></span></label></div>
             <div class="setting-row"><div><div class="setting-label">Qualität</div><div class="setting-help" id="quality-help">Höhere Auflösung bedeutet größere Dateien.</div></div><select id="setting-quality" aria-label="Qualität"><option value="p720">720p · 15 Mbit/s (Standard)</option><option value="p1080">1080p · 25 Mbit/s</option><option value="p1440">1440p · 40 Mbit/s</option><option value="native">Nativ · volle Bildschirmauflösung</option></select></div>
@@ -155,6 +175,7 @@
         <div class="settings-card">
           <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-sound"/></svg></div><div><h2>Ton</h2><p>Systemton und Mikrofon.</p></div></div>
           <div class="settings-body">
+            <div class="setting-row"><div><div class="setting-label">Tonquelle</div><div class="setting-help">Spielton erfasst nur das Zielprogramm und seine Unterprozesse. Benötigt Windows 11 oder Build 20348+. Mikrofon wird separat zugemischt.</div></div><select id="setting-game-audio" aria-label="Tonquelle"><option value="false">Gesamter Systemton</option><option value="true">Nur Spielton</option></select></div>
             <div class="setting-row"><div><div class="setting-label">Systemton aufnehmen</div><div class="setting-help" id="system-audio-help">Alles, was über dein Standard-Wiedergabegerät läuft.</div></div><label class="switch"><input type="checkbox" id="setting-system-audio"><span class="slider"></span></label></div>
             <div class="setting-row" id="system-volume-row"><div><label class="setting-label" for="setting-system-volume">Lautstärke Systemton</label><div class="setting-help" id="system-volume-help">100 % lässt den Ton unverändert.</div></div><div class="volume-wrap"><input id="setting-system-volume" type="range" min="0" max="200" step="5" value="100" aria-label="Lautstärke Systemton"><span class="volume-value" id="system-volume-value">100 %</span></div></div>
             <div class="setting-row"><div><div class="setting-label">Mikrofon aufnehmen</div><div class="setting-help">Deine Stimme wird in den Clip gemischt.</div></div><label class="switch"><input type="checkbox" id="setting-microphone"><span class="slider"></span></label></div>
@@ -292,6 +313,18 @@
             </div>
             <p class="trim-help" id="trim-help">Das Original bleibt erhalten.</p>
           </div>
+          <section class="highlight-panel" aria-labelledby="highlight-heading">
+            <h3 id="highlight-heading">Highlights zusammenstellen</h3>
+            <p class="setting-help">Füge die aktuelle Auswahl hinzu. Öffne anschließend weitere Clips und sortiere die Ausschnitte hier. Bis zu 20 Ausschnitte und 30 Minuten, als 1080p/60-FPS-Video.</p>
+            <button class="btn" id="highlight-add">Auswahl hinzufügen</button>
+            <ol id="highlight-list"></ol>
+            <div class="highlight-actions">
+              <span id="highlight-summary">Noch keine Ausschnitte.</span>
+              <select id="highlight-mode" aria-label="Highlight-Exportprofil"><option value="precise">MP4 · 1080p / 60 FPS</option><option value="discord_free">Discord ohne Nitro · 20 MB</option><option value="discord_nitro">Discord Nitro · 1 GB</option></select>
+              <button class="btn btn-primary" id="highlight-export" disabled>Highlight speichern</button>
+              <button class="btn" id="highlight-clear" disabled>Leeren</button>
+            </div>
+          </section>
         </div>
         <div class="status-line editor-status" id="editor-status" role="status" aria-live="polite"></div>
       </div>

@@ -94,6 +94,8 @@ pub fn ffprobe_for(ffmpeg: &Path) -> Option<PathBuf> {
 /// Everything a recording session needs to know up front.
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
+    pub window: Option<crate::games::RunningApp>,
+    pub audio_process: Option<u32>,
     pub display: Display,
     pub encoder: Encoder,
     pub capabilities: Capabilities,
@@ -148,6 +150,7 @@ impl Segment {
 }
 
 struct Session {
+    window: Option<crate::games::RunningApp>,
     child: Child,
     started: Instant,
     dir: PathBuf,
@@ -181,8 +184,8 @@ pub struct PollIssue {
     pub message: String,
     /// FFmpeg died by itself; starting a fresh capture is worth a try.
     pub capture_lost: bool,
-    /// The drive is nearly full; stop and keep what has been recorded.
-    pub low_disk: bool,
+    /// Low disk space or a lost capture window requires an orderly stop.
+    pub stop_requested: bool,
 }
 
 pub struct Recorder {
@@ -348,6 +351,14 @@ impl Recorder {
         self.session.as_ref().map(|s| &s.info)
     }
 
+    pub fn diagnostics(&self) -> Option<crate::diagnostics::Progress> {
+        let session = self.session.as_ref()?;
+        crate::diagnostics::read(
+            &session.dir.join("progress.txt"),
+            session.started.elapsed().as_secs_f64(),
+        )
+    }
+
     pub fn elapsed(&self) -> Duration {
         self.session
             .as_ref()
@@ -370,11 +381,20 @@ impl Recorder {
     }
 
     /// A replay can be saved successfully even if something else went wrong.
-    fn start_audio(config: &SessionConfig, warnings: &mut Vec<String>) -> Vec<AudioPipe> {
+    fn start_audio(
+        config: &SessionConfig,
+        warnings: &mut Vec<String>,
+    ) -> Result<Vec<AudioPipe>, String> {
         let mut pipes = Vec::new();
         if config.system_audio {
-            match AudioPipe::start(AudioSource::Loopback, config.system_gain) {
+            let source = config
+                .audio_process
+                .map_or(AudioSource::Loopback, |pid| AudioSource::Process { pid });
+            match AudioPipe::start(source, config.system_gain) {
                 Ok(pipe) => pipes.push(pipe),
+                Err(error) if config.audio_process.is_some() => {
+                    return Err(format!("Spielton konnte nicht aufgenommen werden. {error}"))
+                }
                 Err(error) => warnings.push(format!("Systemton nicht verfügbar: {error}")),
             }
         }
@@ -389,7 +409,7 @@ impl Recorder {
                 Err(error) => warnings.push(format!("Mikrofon nicht verfügbar: {error}")),
             }
         }
-        pipes
+        Ok(pipes)
     }
 
     /// Starts recording. Nothing is captured until this is called.
@@ -429,13 +449,39 @@ impl Recorder {
         let _ = fs::write(dir.join("session.json"), marker);
         let list_path = dir.join("segments.csv");
         let log_path = dir.join("ffmpeg.log");
-        let strategies =
-            capture::strategies(&config.display, config.encoder, config.capabilities.ddagrab);
+        let strategies = if let Some(window) = &config.window {
+            if !config.capabilities.gfxcapture {
+                return Err("Diese FFmpeg-Version bietet keine Fensteraufnahme. Wähle eine Version mit gfxcapture in den Einstellungen.".into());
+            }
+            if crate::games::window_size(window.hwnd, window.pid).is_none() {
+                return Err("Das gewählte Fenster ist geschlossen oder minimiert.".into());
+            }
+            let mut encoders = vec![config.encoder, Encoder::Cpu];
+            encoders.dedup();
+            encoders
+                .into_iter()
+                .map(|encoder| capture::Strategy {
+                    source: capture::VideoSource::Window { hwnd: window.hwnd },
+                    encoder,
+                })
+                .collect()
+        } else {
+            capture::strategies(&config.display, config.encoder, config.capabilities.ddagrab)
+        };
         let (width, height) = capture::output_size(&config.display, config.quality);
         let mut failures = Vec::new();
         for strategy in &strategies {
             let mut warnings = Vec::new();
-            let audio = Self::start_audio(&config, &mut warnings);
+            let audio = Self::start_audio(&config, &mut warnings)?;
+            // Audio activation can take seconds. Recheck the HWND's owner after
+            // that wait so a closed/reused handle cannot select another app.
+            if config
+                .window
+                .as_ref()
+                .is_some_and(|w| crate::games::window_size(w.hwnd, w.pid).is_none())
+            {
+                return Err("Das Aufnahmefenster ist nicht mehr verfügbar.".into());
+            }
             let inputs: Vec<AudioInput> = audio.iter().map(|pipe| pipe.input.clone()).collect();
             let _ = fs::remove_file(&list_path);
             let log = File::create(&log_path).map_err(|error| {
@@ -475,6 +521,18 @@ impl Recorder {
             let deadline = Instant::now() + Duration::from_millis(2000);
             let mut died = None;
             while Instant::now() < deadline {
+                if config
+                    .window
+                    .as_ref()
+                    .is_some_and(|w| crate::games::window_size(w.hwnd, w.pid).is_none())
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(
+                        "Das Aufnahmefenster wurde während des Starts geschlossen oder minimiert."
+                            .into(),
+                    );
+                }
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         died = Some(status);
@@ -508,6 +566,7 @@ impl Recorder {
             };
             let _ = fs::write(dir.join("command.txt"), description);
             self.session = Some(Session {
+                window: config.window.clone(),
                 child,
                 started,
                 dir,
@@ -544,6 +603,13 @@ impl Recorder {
     /// space and trims old segments.
     pub fn poll(&mut self) -> Option<PollIssue> {
         let session = self.session.as_mut()?;
+        if session
+            .window
+            .as_ref()
+            .is_some_and(|window| crate::games::window_size(window.hwnd, window.pid).is_none())
+        {
+            return Some(PollIssue { message: "Das Aufnahmefenster wurde geschlossen oder minimiert. Die Aufnahme wird beendet.".into(), capture_lost: false, stop_requested: true });
+        }
         let keep_full = session.keep_full;
         match session.child.try_wait() {
             Ok(None) => {}
@@ -560,7 +626,7 @@ impl Recorder {
                         "Die Bildschirmaufnahme wurde unerwartet beendet ({status}). {detail}"
                     ),
                     capture_lost: !keep_full,
-                    low_disk: false,
+                    stop_requested: false,
                 });
             }
             Err(error) => {
@@ -571,7 +637,7 @@ impl Recorder {
                 return Some(PollIssue {
                     message: format!("Der Aufnahmestatus konnte nicht geprüft werden: {error}"),
                     capture_lost: false,
-                    low_disk: false,
+                    stop_requested: false,
                 });
             }
         }
@@ -588,7 +654,7 @@ impl Recorder {
                             format_bytes(free)
                         ),
                         capture_lost: false,
-                        low_disk: true,
+                        stop_requested: true,
                     });
                 }
             }
@@ -1706,6 +1772,8 @@ mod tests {
         let _ = fs::create_dir_all(&dir);
         let mut recorder = Recorder::new(PathBuf::from("missing-ffmpeg"));
         let config = SessionConfig {
+            window: None,
+            audio_process: None,
             display: Display {
                 name: "\\\\.\\DISPLAY1".into(),
                 x: 0,
@@ -1962,6 +2030,8 @@ mod tests {
         let mut recorder = Recorder::new(ffmpeg.clone());
         let info = recorder
             .start(SessionConfig {
+                window: None,
+                audio_process: None,
                 display,
                 encoder: capture::select_encoder(
                     crate::settings::EncoderChoice::Auto,
@@ -2010,6 +2080,8 @@ capabilities {capabilities:?}"
         let mut recorder = Recorder::new(ffmpeg.clone());
         let info = recorder
             .start(SessionConfig {
+                window: None,
+                audio_process: None,
                 display,
                 encoder: capture::select_encoder(
                     crate::settings::EncoderChoice::Auto,
@@ -2240,6 +2312,8 @@ capabilities {capabilities:?}"
         let mut recorder = Recorder::new(ffmpeg.clone());
         recorder
             .start(SessionConfig {
+                window: None,
+                audio_process: None,
                 display,
                 encoder: capture::select_encoder(
                     crate::settings::EncoderChoice::Auto,
