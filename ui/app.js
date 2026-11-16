@@ -17,6 +17,7 @@
     close_to_tray: true, record_on_launch: false, start_minimized: false,
     microphone_separate_track: false, precise_clips: false, clip_sound: true, overlay_notifications: true,
     auto_record_games: true, builtin_games: true, custom_games: [],
+    game_profiles: [], capture_window: false, game_audio: false, target_exe: '',
   };
   let state = {
     clips: [], recording: false, elapsed: 0, busy: false, capture_busy: false, status: '', error: false,
@@ -215,6 +216,13 @@
     play.append(icon('play'));
     thumbnail.append(play);
     const menu = el('button', 'card-menu');
+    const favorite = el('button', 'card-favorite', clip.favorite ? '★' : '☆');
+    favorite.setAttribute('aria-label', clip.favorite ? 'Favorit entfernen' : 'Als Favorit behalten');
+    favorite.setAttribute('aria-pressed', String(!!clip.favorite));
+    favorite.title = 'Favoriten sind vor automatischem Löschen geschützt';
+    favorite.disabled = state.busy;
+    favorite.addEventListener('click', event => { event.stopPropagation(); ipc('favorite', { id: clip.id, favorite: !clip.favorite }); });
+    favorite.addEventListener('keydown', event => event.stopPropagation());
     menu.setAttribute('aria-label', 'Weitere Aktionen');
     menu.title = 'Weitere Aktionen';
     menu.append(icon('more'));
@@ -227,7 +235,7 @@
     if (clip.width && clip.height) details.push(`${clip.width}×${clip.height}`);
     meta.append(el('span', '', details.join(' · ')), el('span', '', dateLabel(clip.created)));
     info.append(meta);
-    card.append(thumbnail, menu, info);
+    card.append(thumbnail, favorite, menu, info);
     card.addEventListener('click', () => openEditor(clip));
     card.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openEditor(clip); }
@@ -239,7 +247,7 @@
 
   function renderLibrary() {
     const query = $('search').value.trim().toLocaleLowerCase('de-DE');
-    const clips = state.clips.filter(clip => String(clip.name).toLocaleLowerCase('de-DE').includes(query));
+    const clips = state.clips.filter(clip => String(clip.name).toLocaleLowerCase('de-DE').includes(query) && (!$('favorites-only').checked || clip.favorite));
     const order = $('sort').value;
     clips.sort((a, b) => {
       if (order === 'name') return String(a.name).localeCompare(String(b.name), 'de');
@@ -258,6 +266,7 @@
   }
   $('search').addEventListener('input', renderLibrary);
   $('sort').addEventListener('change', renderLibrary);
+  $('favorites-only').addEventListener('change', renderLibrary);
   $('reset-search').addEventListener('click', () => { $('search').value = ''; renderLibrary(); $('search').focus(); });
 
   // ---------------------------------------------------------- context menu
@@ -304,7 +313,7 @@
   // ---------------------------------------------------------- record card
   function renderRecordCard() {
     const unavailable = !loaded || state.busy;
-    const settings = state.settings;
+    const settings = { ...state.settings, ...state.runtime_settings };
     const recording = state.recording;
     const replayLabel = hotkeyLabel(settings.hotkey_replay);
     $('record-card').classList.toggle('recording', recording);
@@ -352,7 +361,7 @@
     };
     const display = displayFor(state.capture_display || settings.display);
     if (recording && state.session) {
-      add('monitor', `${display ? display.label.split(' · ')[0] : 'Bildschirm'} → ${state.session.width}×${state.session.height}`);
+      add('monitor', `${settings.capture_window ? 'Spielfenster' : display ? display.label.split(' · ')[0] : 'Bildschirm'} → ${state.session.width}×${state.session.height}`);
       add(state.session.audio.length ? 'sound' : 'sound-off', state.session.audio.length ? state.session.audio.join(' + ') : 'Ohne Ton');
       add(null, `${settings.fps} FPS`);
       add('chip', state.session.strategy);
@@ -376,6 +385,21 @@
     side.classList.toggle('recording', recording);
     $('side-session-label').textContent = recording ? 'Aufnahme läuft' : (state.ffmpeg_available ? 'Bereit' : 'FFmpeg fehlt');
     $('side-session-timer').textContent = clock(state.elapsed);
+    const stats = state.diagnostics;
+    const metric = (value, suffix = '') => value === null || value === undefined ? '–' : `${value}${suffix}`;
+    $('diagnostic-values').replaceChildren(...[
+      `Encoder: ${state.session?.strategy || state.selected_encoder || '–'}`,
+      `Kodiert (Ø): ${metric(stats?.fps, ' FPS')}`,
+      `Verworfen: ${metric(stats?.dropped)}`,
+      `Dupliziert: ${metric(stats?.duplicated)}`,
+      `Rückstand: ${metric(stats?.lag_seconds?.toFixed(1), ' s')}`,
+      `Puffer: ${size(state.buffer_bytes)}`,
+      `Frei: ${state.free_bytes == null ? '–' : size(state.free_bytes)}`,
+    ].map(text => el('span', '', text)));
+    $('diagnostic-health').textContent = !state.recording ? 'Messwerte erscheinen während der Aufnahme. FPS sind Encoderwerte, keine Spiel-FPS.'
+      : !stats || stats.frames == null ? 'Warte auf die ersten Encoderwerte …'
+        : stats.age_seconds > 5 || stats.lag_seconds > 5 ? 'Die Aufnahme liefert verzögert Bilder. Prüfe Fenster, Auflösung, FPS und Encoder.'
+          : 'Die Aufnahme liefert aktuelle Bilder. Verworfen/dupliziert zählt FFmpeg seit Aufnahmestart.';
   }
 
   // Marked moments waiting for their clip. Rebuilt only when something about
@@ -415,6 +439,41 @@
   }
 
   // -------------------------------------------------------------- settings
+  let profileSignature = '';
+  function renderProfiles(settings, locked) {
+    const games = [...new Map([...(state.builtin_games || []), ...(settings.custom_games || []), ...(state.apps || []), ...(settings.game_profiles || [])]
+      .filter(g => g.exe).map(g => [g.exe, { value: g.exe, label: g.name || g.exe }])).values()];
+    fillSelect($('profile-game'), [{ value: '', label: 'Spiel wählen …' }, ...games], $('profile-game').value || '');
+    const exe = $('profile-game').value;
+    const stored = (settings.game_profiles || []).find(p => p.exe === exe);
+    const data = stored || settings;
+    const signature = JSON.stringify([exe, data.quality, data.fps, data.replay_seconds, data.microphone, data.system_audio, data.capture_window, data.game_audio]);
+    if (signature !== profileSignature) {
+      profileSignature = signature;
+      $('profile-quality').value = data.quality;
+      fillSelect($('profile-fps'), state.fps_choices.map(v => ({ value: v, label: `${v} FPS` })), data.fps);
+      $('profile-replay').value = data.replay_seconds;
+      $('profile-microphone').checked = !!data.microphone;
+      $('profile-system-audio').checked = !!data.system_audio;
+      $('profile-window').checked = !!data.capture_window;
+      $('profile-audio').checked = !!data.game_audio;
+    }
+    $('profile-game').disabled = locked;
+    ['profile-quality', 'profile-fps', 'profile-replay', 'profile-microphone', 'profile-system-audio', 'profile-window', 'profile-audio', 'profile-save'].forEach(id => { $(id).disabled = locked || !exe; });
+    $('profile-remove').disabled = locked || !stored;
+    $('profile-status').textContent = !exe ? 'Wähle ein Spiel. Ein Profil gilt ab der nächsten Aufnahme.'
+      : stored ? 'Eigenes Profil vorhanden. Änderungen mit „Profil übernehmen“ und unten „Änderungen speichern“ sichern.'
+        : 'Bisher gelten die allgemeinen Einstellungen. Erstelle hier eigene Vorgaben.';
+  }
+  $('profile-game').addEventListener('change', () => { profileSignature = ''; renderSettings(); });
+  $('profile-save').addEventListener('click', () => {
+    const exe = $('profile-game').value;
+    if (!exe || !$('profile-replay').reportValidity()) return;
+    const profile = { exe, quality: $('profile-quality').value, fps: Number($('profile-fps').value), replay_seconds: Number($('profile-replay').value),
+      microphone: $('profile-microphone').checked, system_audio: $('profile-system-audio').checked, capture_window: $('profile-window').checked, game_audio: $('profile-audio').checked };
+    edit(d => { d.game_profiles = [...(d.game_profiles || []).filter(p => p.exe !== exe), profile]; });
+  });
+  $('profile-remove').addEventListener('click', () => edit(d => { d.game_profiles = (d.game_profiles || []).filter(p => p.exe !== $('profile-game').value); }));
   function settingsDirty() {
     if (!draft) return false;
     return JSON.stringify(draft) !== JSON.stringify(state.settings) || (draftAutostart !== null && draftAutostart !== state.autostart);
@@ -447,6 +506,15 @@
     const autostart = draftAutostart === null ? state.autostart : draftAutostart;
     const locked = !loaded || state.busy;
     const recordingLocked = locked || state.recording;
+    $('setting-capture-window').value = String(!!settings.capture_window);
+    $('setting-game-audio').value = String(!!settings.game_audio);
+    const apps = [...new Map((state.apps || []).map(a => [a.exe, a])).values()];
+    fillSelect($('setting-target'), [{ value: '', label: 'Automatisch erkanntes Spiel' }, ...apps.map(a => ({ value: a.exe, label: `${a.exe} · ${a.title}` }))], settings.target_exe || '');
+    $('window-support').textContent = state.capabilities.gfxcapture
+      ? 'Fensteraufnahme bereit. Beim Minimieren oder Schließen endet die Aufnahme.'
+      : 'Fensteraufnahme benötigt eine FFmpeg-Version mit gfxcapture. Der Bildschirmmodus funktioniert weiterhin.';
+    ['setting-capture-window', 'setting-game-audio', 'setting-target'].forEach(id => { $(id).disabled = recordingLocked; });
+    renderProfiles(settings, recordingLocked);
 
     fillSelect($('setting-display'), [
       { value: '', label: 'Hauptbildschirm (automatisch)' },
@@ -630,6 +698,9 @@
     return inRange(value) && (long === 0 || inRange(long));
   }
   $('setting-display').addEventListener('change', () => edit(d => { d.display = $('setting-display').value; }));
+  $('setting-capture-window').addEventListener('change', () => edit(d => { d.capture_window = $('setting-capture-window').value === 'true'; }));
+  $('setting-game-audio').addEventListener('change', () => edit(d => { d.game_audio = $('setting-game-audio').value === 'true'; }));
+  $('setting-target').addEventListener('change', () => edit(d => { d.target_exe = $('setting-target').value; }));
   $('setting-quality').addEventListener('change', () => edit(d => { d.quality = $('setting-quality').value; }));
   $('setting-fps').addEventListener('change', () => edit(d => { d.fps = Number($('setting-fps').value); }));
   $('setting-encoder').addEventListener('change', () => edit(d => { d.encoder = $('setting-encoder').value; }));
@@ -868,7 +939,53 @@
         : discordLimit ? `MP4 unter ${discordLimit}. Die Qualität passt sich der Cliplänge an; die fertige Dateigröße wird geprüft. Das Komprimieren kann etwas dauern. Das Original bleibt erhalten.`
           : mode === 'fast' ? 'Schnell: ohne Neukodierung, der Schnitt beginnt am vorherigen Keyframe (bis zu einer Sekunde früher). Das Original bleibt erhalten.'
           : 'Präzise: bildgenau, dauert je nach Länge ein paar Sekunden. Das Original bleibt erhalten.';
+    renderHighlights();
   }
+
+  const highlightPieces = [];
+  let highlightSignature = '';
+  function renderHighlights() {
+    $('highlight-add').disabled = $('trim-clip').disabled || highlightPieces.length >= 20;
+    const total = highlightPieces.reduce((sum, piece) => sum + piece.end - piece.start, 0);
+    const missing = highlightPieces.some(piece => !state.clips.some(clip => clip.id === piece.id));
+    const signature = JSON.stringify([highlightPieces, state.busy, highlightPieces.map(piece => state.clips.find(clip => clip.id === piece.id)?.name)]);
+    if (signature !== highlightSignature) {
+      highlightSignature = signature;
+      $('highlight-list').replaceChildren(...highlightPieces.map((piece, index) => {
+      const clip = state.clips.find(c => c.id === piece.id);
+      const row = el('li', 'highlight-piece');
+      row.append(el('span', '', `${clip?.name || piece.name} · ${piece.start.toFixed(1)}–${piece.end.toFixed(1)} s${clip ? '' : ' (nicht mehr verfügbar)'}`));
+      for (const [label, delta] of [['↑', -1], ['↓', 1], ['Entfernen', 0]]) {
+        const button = el('button', 'btn small', label);
+        button.setAttribute('aria-label', delta < 0 ? 'Ausschnitt nach oben' : delta > 0 ? 'Ausschnitt nach unten' : 'Ausschnitt entfernen');
+        button.disabled = state.busy || (delta !== 0 && (index + delta < 0 || index + delta >= highlightPieces.length));
+        button.addEventListener('click', () => {
+          if (delta) [highlightPieces[index], highlightPieces[index + delta]] = [highlightPieces[index + delta], highlightPieces[index]];
+          else highlightPieces.splice(index, 1);
+          renderHighlights();
+        });
+        row.append(button);
+      }
+      return row;
+    }));
+    }
+    $('highlight-summary').textContent = missing ? 'Ein Quellclip fehlt. Entferne den betroffenen Ausschnitt.'
+      : total > 1800 ? 'Bitte auf höchstens 30 Minuten kürzen.'
+        : highlightPieces.length ? `${highlightPieces.length} Ausschnitte · ${short(total)}` : 'Noch keine Ausschnitte.';
+    $('highlight-export').disabled = !loaded || state.busy || !state.ffmpeg_available || !highlightPieces.length || missing || total > 1800;
+    $('highlight-clear').disabled = state.busy || !highlightPieces.length;
+    $('highlight-mode').disabled = state.busy;
+  }
+  $('highlight-add').addEventListener('click', () => {
+    if (!$('highlight-add').disabled && selected) {
+      highlightPieces.push({ id: selected.id, name: selected.name, start: Number($('trim-start').value), end: Number($('trim-end').value) });
+      renderHighlights();
+    }
+  });
+  $('highlight-clear').addEventListener('click', () => { highlightPieces.length = 0; renderHighlights(); });
+  $('highlight-export').addEventListener('click', () => {
+    if (!$('highlight-export').disabled) ipc('highlights', { pieces: highlightPieces.map(({ id, start, end }) => ({ id, start, end })), mode: $('highlight-mode').value });
+  });
 
   // timeline interaction
   const track = $('timeline-track');
@@ -970,6 +1087,7 @@
     if (!$('confirm-backdrop').hidden) { if (event.key === 'Escape') closeConfirm(); return; }
     if (!$('context-menu').hidden && event.key === 'Escape') { closeMenu(); return; }
     if ($('editor-backdrop').hidden || capturing) return;
+    if (document.activeElement?.tagName === 'BUTTON' && [' ', 'Enter'].includes(event.key)) return;
     const typing = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement && document.activeElement.tagName);
     if (event.key === 'Escape') { event.preventDefault(); if (typing) document.activeElement.blur(); else closeEditor(); return; }
     if (event.key === 'Tab') {

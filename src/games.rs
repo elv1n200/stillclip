@@ -205,6 +205,7 @@ pub fn builtin_games() -> Vec<GameEntry> {
 /// A top-level window with its owning executable.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RunningApp {
+    pub hwnd: u64,
     pub pid: u32,
     pub exe: String,
     pub title: String,
@@ -230,6 +231,33 @@ const IGNORED_EXES: &[&str] = &[
     "taskmgr.exe",
     "dwm.exe",
 ];
+
+#[cfg(windows)]
+pub fn window_size(hwnd: u64, pid: u32) -> Option<(u32, u32)> {
+    use windows_sys::Win32::{
+        Foundation::RECT,
+        UI::WindowsAndMessaging::{GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow},
+    };
+    let handle = hwnd as usize as _;
+    let mut owner = 0;
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
+    unsafe {
+        if IsWindow(handle) == 0 || IsIconic(handle) != 0 {
+            return None;
+        }
+        GetWindowThreadProcessId(handle, &mut owner);
+        if owner != pid || GetWindowRect(handle, &mut rect) == 0 {
+            return None;
+        }
+    }
+    let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+    (w > 1 && h > 1).then_some((w as u32, h as u32))
+}
+
+#[cfg(not(windows))]
+pub fn window_size(_: u64, _: u32) -> Option<(u32, u32)> {
+    None
+}
 
 /// Device name of the display a window sits on, empty when it cannot be told.
 #[cfg(windows)]
@@ -294,7 +322,12 @@ pub fn visible_apps() -> Vec<RunningApp> {
             }
             let mut buffer = vec![0_u16; 1024];
             let mut size = buffer.len() as u32;
-            let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut size);
+            let ok = QueryFullProcessImageNameW(
+                process,
+                PROCESS_NAME_WIN32,
+                buffer.as_mut_ptr(),
+                &mut size,
+            );
             CloseHandle(process);
             if ok == 0 {
                 return 1;
@@ -307,6 +340,7 @@ pub fn visible_apps() -> Vec<RunningApp> {
             if !apps.iter().any(|a| a.pid == pid && a.title == title) {
                 let monitor = window_monitor(hwnd);
                 apps.push(RunningApp {
+                    hwnd: hwnd as usize as u64,
                     pid,
                     exe,
                     title,
@@ -431,26 +465,35 @@ mod tests {
         assert_eq!(normalize_exe("C:/Games/CS2/cs2.exe"), "cs2.exe");
         assert_eq!(normalize_exe(" Fortnite "), "fortnite.exe");
         assert_eq!(normalize_exe(""), "");
-        assert_eq!(display_name("FortniteClient-Win64-Shipping.exe"), "FortniteClient");
+        assert_eq!(
+            display_name("FortniteClient-Win64-Shipping.exe"),
+            "FortniteClient"
+        );
         assert_eq!(display_name("cs2.exe"), "Cs2");
         let entry = GameEntry::new("CS2.EXE", " Counter-Strike 2 ");
         assert_eq!(entry.exe, "cs2.exe");
         assert_eq!(entry.name, "Counter-Strike 2");
         let app = RunningApp {
+            hwnd: 0,
             pid: 7,
             exe: "cs2.exe".into(),
             title: "Counter-Strike 2".into(),
             monitor: "\\\\.\\DISPLAY1".into(),
         };
         assert!(entry.matches(&app));
-        let minecraft = builtin_games().into_iter().find(|g| g.exe == "javaw.exe").unwrap();
+        let minecraft = builtin_games()
+            .into_iter()
+            .find(|g| g.exe == "javaw.exe")
+            .unwrap();
         assert!(minecraft.matches(&RunningApp {
+            hwnd: 0,
             pid: 1,
             exe: "javaw.exe".into(),
             title: "Minecraft 1.21".into(),
             monitor: String::new(),
         }));
         assert!(!minecraft.matches(&RunningApp {
+            hwnd: 0,
             pid: 1,
             exe: "javaw.exe".into(),
             title: "IntelliJ".into(),
