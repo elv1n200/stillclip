@@ -414,7 +414,10 @@ impl App {
                     .collect();
                 let thumbs = self.thumbnail_dir();
                 let plain: Vec<Clip> = self.clips.iter().map(|(_, c)| c.clone()).collect();
-                self.index.prune(&plain, &thumbs);
+                // Keep source metadata until an in-flight rename has moved it.
+                if !self.busy {
+                    self.index.prune(&plain, &thumbs);
+                }
                 self.update_media_map();
                 if !self.busy && !self.capture.transitioning {
                     self.schedule_indexing();
@@ -1759,6 +1762,7 @@ impl App {
                         .map(|entry| entry.markers.clone())
                         .unwrap_or_default();
                     self.remember_markers(path, moved);
+                    self.index.save(&self.config);
                 }
 
                 let has_warnings = outcome
