@@ -1,0 +1,47 @@
+name: Build bundled media tools
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  media:
+    runs-on: windows-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: media-cache
+        with:
+          path: .media-build/output
+          key: windows-ucrt-media-v1-${{ hashFiles('packaging/media-sources.json', 'packaging/build-media.sh') }}
+      - uses: msys2/setup-msys2@v2
+        if: steps.media-cache.outputs.cache-hit != 'true'
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            base-devel git curl tar xz
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+      - name: Build pinned FFmpeg and corresponding source package
+        if: steps.media-cache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: bash packaging/build-media.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stillclip-media
+          path: |
+            .media-build/output/stillclip-media-windows-x64.zip
+            .media-build/output/stillclip-media-source.tar.xz
+          if-no-files-found: error
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-build-diagnostics
+          path: .media-build/build-ffmpeg/ffbuild/config.log
+          if-no-files-found: ignore

@@ -13,3 +13,6 @@
 /shots/qa/
 /shots/overlay*.png
 /shots/now.png
+
+/.media-build/
+/dist/
