@@ -136,23 +136,64 @@ and works in windowed/borderless games; exclusive fullscreen may hide it.
 Supported Windows capture APIs exclude the HUD from the recording. The existing
 short notifications briefly replace the HUD and then restore it.
 
+## Automatic VALORANT highlights (experimental)
+
+1. Open **Settings → Desktop & setup → VALORANT · automatic highlights**.
+2. Enter your name exactly as it appears in the killfeed, without the Riot #tag.
+   Names currently need at least three ASCII letters/digits; names with spaces
+   and ASCII punctuation are accepted too.
+3. Enable **Save confirmed highlights automatically**. The default saves groups
+   with at least two recognized kills. Choose one to five and adjust **Clip
+   timing** if needed: 12 seconds before, 6 seconds after, and an 8-second
+   grouping interval are the defaults.
+4. Enable automatic recording under **Games**, then start VALORANT. Detection
+   starts with a new recording identified as VALORANT. When starting capture
+   manually, select VALORANT as the target or start it after the game is detected.
+
+Completed clips appear in the library as `VALORANT 2K …`, `VALORANT 3K …`, and so
+on, with a marker for each recognized kill and the tags `auto-highlight` and
+`2k`/`3k`. The count describes detected events; `5K` does not certify an ace.
+Audio tracks are preserved. Open the clip to trim it or choose a Discord export;
+automatic saving does not upload anything or impose Discord's file limit.
+
+The library and settings show progress, detected kills, saved clips and any
+skipped ranges. **Pause detection for this recording** stops analysis and leaves
+recording running. It resumes on the next VALORANT recording. Stop capture and
+wait for processing before changing the name, region or detection settings.
+
+Detection reads completed recording segments, so clips arrive with a delay.
+Stopping recording lets the final moments finish; pausing or starting a new
+recording cancels unfinished analysis. With detection enabled, the replay
+buffer retains at least two minutes, even if the F8 replay is shorter. A slow
+PC may skip older analysis when it falls more than roughly 40 seconds behind;
+the status shows this instead of accumulating an unlimited queue.
+
+This feature uses local image recognition and additional CPU. It is experimental,
+can miss or misread events, and is tested with synthetic footage rather than
+real matches. Try it in a short session and check the results and game performance.
+[Implementation, limitations and validation →](HIGHLIGHTS.md)
+
 ## Local VALORANT suggestions (experimental)
 
 Open a recording, select a range of up to 30 minutes, and expand **VALORANT ·
 highlight suggestions**. Enter the name displayed in the killfeed without the
 Riot #tag. Currently the recognition path supports Latin ASCII names of at least
 three characters. Adjust the killfeed crop percentages for different layouts
-or aspect ratios. Click **Analyze selection**.
+or aspect ratios, or use **Select killfeed in the frame** to drag a rectangle
+around the visible feed. The percentage fields also support precise keyboard
+input. Click **Analyze selection**.
 
 This analyzes saved video locally using bundled OCR models. It does not access
 game memory, inject an overlay into the game, or upload video or recognized names.
 The detector looks for your name in the killer position, requires repeated
 observations, and suppresses persistent duplicate lines. It can still misread
-names, mistake text, and miss events. Automated checks use a synthetic image,
+names, mistake text, and miss events. Automated checks use synthetic images and video,
 not real VALORANT match footage; real-match accuracy has not been established.
 
 Use **Preview range** to inspect each suggestion, then **Keep marker** for the
-ones you want. Nothing is automatically exported. You can add a reviewed range
+ones you want. A grouped suggestion adds a marker for every recognized kill;
+uncertain names are labelled for review. This manual analysis does not export
+automatically. You can add a reviewed range
 to the existing highlight list. A recording request cancels analysis and starts
 capture once the worker has stopped. Only one analysis/test/update task runs at
 a time. Long analyses may take several minutes.

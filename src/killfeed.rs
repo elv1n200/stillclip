@@ -1,11 +1,10 @@
-//! Experimental, offline OCR of a user-selected recording. It only proposes
-//! ranges: no game hooks, process-memory reads, automatic exports or uploads.
+//! Shared local image reader for review and automatic VALORANT highlights.
+//! It observes saved video pixels only; game state is never accessed.
 use crate::{capture::command, export::Snapshot, i18n::text, jobs::Control, recorder};
 use ocrs::{ImageSource, OcrEngine, OcrEngineParams, TextItem};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -49,6 +48,9 @@ pub struct Suggestion {
     pub start: f64,
     pub end: f64,
     pub text: String,
+    pub events: Vec<f64>,
+    pub kills: usize,
+    pub confidence: crate::valorant::Confidence,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -83,7 +85,7 @@ pub fn validate_name(name: &str) -> Result<(), String> {
 
 /// Require a left-hand killer name followed by a separated right-hand name.
 /// A matching victim, partial name or isolated label must not become a kill.
-fn own_kills(mut words: Vec<Word>, player: &str) -> Vec<String> {
+fn own_rows(mut words: Vec<Word>, player: &str) -> Vec<crate::valorant::Row> {
     words.sort_by_key(|w| w.y);
     let mut rows: Vec<Vec<Word>> = Vec::new();
     for word in words {
@@ -103,7 +105,9 @@ fn own_kills(mut words: Vec<Word>, player: &str) -> Vec<String> {
             let mut prefix = String::new();
             for i in 0..row.len().saturating_sub(1) {
                 prefix.push_str(&normalized(&row[i].text));
-                if prefix == player && row[i + 1].x - row[i].right >= row[i].height.max(8) {
+                if let Some(exact) = crate::valorant::name_matches(&prefix, &player)
+                    .filter(|_| row[i + 1].x - row[i].right >= row[i].height.max(8))
+                {
                     let victim = row[i + 1..]
                         .iter()
                         .map(|w| w.text.as_str())
@@ -112,15 +116,19 @@ fn own_kills(mut words: Vec<Word>, player: &str) -> Vec<String> {
                     if normalized(&victim).len() < 2 || normalized(&victim) == player {
                         return None;
                     }
-                    return Some(format!(
-                        "{} → {}",
-                        row[..=i]
-                            .iter()
-                            .map(|w| w.text.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                        victim
-                    ));
+                    return Some(crate::valorant::Row {
+                        text: format!(
+                            "{} → {}",
+                            row[..=i]
+                                .iter()
+                                .map(|w| w.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                            victim
+                        ),
+                        victim,
+                        exact,
+                    });
                 }
             }
             None
@@ -128,40 +136,219 @@ fn own_kills(mut words: Vec<Word>, player: &str) -> Vec<String> {
         .collect()
 }
 
-#[derive(Default)]
-struct Tracker {
-    seen: HashMap<String, (f64, u32, bool)>,
-    suggestions: Vec<Suggestion>,
+pub struct Reader {
+    engine: OcrEngine,
 }
-impl Tracker {
-    fn frame(&mut self, at: f64, rows: &[String], duration: f64, before: f64, after: f64) {
-        // Persistent killfeed lines and short OCR gaps count once. A line must
-        // appear in two sampled frames before it is suggested.
-        let mut in_frame = std::collections::HashSet::new();
-        for row in rows {
-            let key = normalized(row);
-            if !in_frame.insert(key.clone()) {
-                continue;
-            }
-            let item = self.seen.entry(key).or_insert((at, 0, false));
-            if at - item.0 > 3.0 {
-                *item = (at, 0, false);
-            }
-            item.1 += 1;
-            if item.1 >= 2 && !item.2 {
-                let event = (at - 0.5).max(0.0);
-                self.suggestions.push(Suggestion {
-                    at: event,
-                    start: (event - before).max(0.0),
-                    end: (event + after).min(duration),
-                    text: row.chars().take(160).collect(),
-                });
-                item.2 = true;
-            }
-            item.0 = at;
-        }
-        self.seen.retain(|_, (last, _, _)| at - *last <= 8.0);
+pub struct Observation {
+    pub rows: Vec<crate::valorant::Row>,
+    pub score: Option<(u32, u32)>,
+    pub round_banner: bool,
+}
+impl Reader {
+    pub fn load() -> Result<Self, String> {
+        let root = models_dir().ok_or(text(
+            "OCR-Modelle fehlen. Nutze den vollständigen Installer.",
+            "OCR models are missing. Use the complete installer.",
+        ))?;
+        Ok(Self {
+            engine: engine(&root)?,
+        })
     }
+    fn words(&self, pixels: &image::RgbImage) -> Result<Vec<Word>, String> {
+        let input = self
+            .engine
+            .prepare_input(
+                ImageSource::from_bytes(pixels.as_raw(), pixels.dimensions())
+                    .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+        let boxes = self
+            .engine
+            .detect_words(&input)
+            .map_err(|e| e.to_string())?;
+        let lines = self.engine.find_text_lines(&input, &boxes);
+        let lines = self
+            .engine
+            .recognize_text(&input, &lines)
+            .map_err(|e| e.to_string())?;
+        Ok(lines
+            .iter()
+            .flatten()
+            .flat_map(|line| line.words())
+            .map(|word| {
+                let rect = word.bounding_rect();
+                Word {
+                    text: word.to_string(),
+                    x: rect.left(),
+                    right: rect.right(),
+                    y: rect.top() + rect.height() / 2,
+                    height: rect.height(),
+                }
+            })
+            .collect())
+    }
+    pub fn observe(
+        &self,
+        frame: &image::RgbImage,
+        player: &str,
+        region: Region,
+    ) -> Result<Observation, String> {
+        if !region.valid() {
+            return Err(text("Ungültiger Killfeed-Bereich.", "Invalid killfeed region.").into());
+        }
+        let feed = crop(frame, region, 960, 480);
+        // Score and round banners corroborate boundaries; they never generate
+        // kills. Restrict score candidates to the two sides of the timer.
+        let hud = crop(
+            frame,
+            Region {
+                left: 0.32,
+                top: 0.0,
+                width: 0.36,
+                height: 0.25,
+            },
+            640,
+            320,
+        );
+        // The detection model has a fixed input size. Packing the two regions
+        // into one image avoids running that expensive model twice per frame.
+        // A blank gutter keeps words from the feed and HUD separate.
+        let hud_y = feed.height() + 32;
+        let mut combined =
+            image::RgbImage::new(feed.width().max(hud.width()), hud_y + hud.height());
+        image::imageops::replace(&mut combined, &feed, 0, 0);
+        image::imageops::replace(&mut combined, &hud, 0, hud_y as i64);
+        let mut feed_words = Vec::new();
+        let mut words = Vec::new();
+        for mut word in self.words(&combined)? {
+            if word.y < feed.height() as i32 {
+                feed_words.push(word);
+            } else if word.y >= hud_y as i32 && word.x < hud.width() as i32 {
+                word.y -= hud_y as i32;
+                words.push(word);
+            }
+        }
+        let rows = own_rows(feed_words, player);
+        let numbers = |lo: f64, hi: f64| -> Option<u32> {
+            let mut values = words
+                .iter()
+                .filter(|w| {
+                    let x = (w.x + w.right) as f64 / (2.0 * hud.width() as f64);
+                    let y = w.y as f64 / hud.height() as f64;
+                    x >= lo
+                        && x <= hi
+                        && y < 0.32
+                        && w.text.len() <= 2
+                        && w.text.bytes().all(|b| b.is_ascii_digit())
+                })
+                .filter_map(|w| w.text.parse::<u32>().ok());
+            let value = values.next()?;
+            values.next().is_none().then_some(value)
+        };
+        let score = numbers(0.20, 0.45).zip(numbers(0.55, 0.80));
+        let banner = words
+            .iter()
+            .map(|w| w.text.to_ascii_uppercase())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let banner = banner.split_whitespace().collect::<Vec<_>>().join(" ");
+        let round_banner = [
+            "BUY PHASE",
+            "KAUFPHASE",
+            "ROUND WON",
+            "ROUND LOST",
+            "VICTORY",
+            "DEFEAT",
+            "GEWONNEN",
+            "VERLOREN",
+        ]
+        .iter()
+        .any(|needle| banner.contains(needle));
+        Ok(Observation {
+            rows,
+            score,
+            round_banner,
+        })
+    }
+}
+fn crop(
+    frame: &image::RgbImage,
+    region: Region,
+    max_width: u32,
+    max_height: u32,
+) -> image::RgbImage {
+    let x = (region.left * frame.width() as f64).floor() as u32;
+    let y = (region.top * frame.height() as f64).floor() as u32;
+    let width = ((region.width * frame.width() as f64).ceil() as u32)
+        .max(1)
+        .min(frame.width() - x);
+    let height = ((region.height * frame.height() as f64).ceil() as u32)
+        .max(1)
+        .min(frame.height() - y);
+    let image = image::imageops::crop_imm(frame, x, y, width, height).to_image();
+    let scale = (max_width as f64 / width as f64).min(max_height as f64 / height as f64);
+    image::imageops::resize(
+        &image,
+        (width as f64 * scale).round().max(1.0) as u32,
+        (height as f64 * scale).round().max(1.0) as u32,
+        image::imageops::FilterType::Triangle,
+    )
+}
+
+pub fn decode_frames(
+    ffmpeg: &Path,
+    input: &Path,
+    directory: &Path,
+    start: f64,
+    length: f64,
+    control: &Control,
+) -> Result<Vec<PathBuf>, String> {
+    control.check()?;
+    let mut cmd = command(ffmpeg);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000 | 0x00004000); // No window; below-normal priority.
+    }
+    cmd.args([
+        "-hide_banner",
+        "-v",
+        "error",
+        "-nostdin",
+        "-y",
+        "-threads",
+        "1",
+        "-ss",
+    ])
+    .arg(format!("{start:.6}"))
+    .arg("-i")
+    .arg(input)
+    .arg("-t")
+    .arg(format!("{length:.6}"))
+    .args([
+        "-vf",
+        "fps=2,scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease",
+        "-an",
+        "-threads",
+        "1",
+        "-compression_level",
+        "1",
+        "-frames:v",
+        "24",
+    ])
+    .arg(directory.join("frame-%03d.png"));
+    let result = control.run(
+        &mut cmd,
+        length,
+        text("Spielereignisse lesen", "Reading game events"),
+    )?;
+    if !result.status.success() {
+        return Err(recorder::diagnostic(&result.stderr));
+    }
+    Ok((1..=24)
+        .map(|i| directory.join(format!("frame-{i:03}.png")))
+        .take_while(|p| p.is_file())
+        .collect())
 }
 
 pub fn models_dir() -> Option<PathBuf> {
@@ -246,109 +433,85 @@ pub fn analyze(
         )
         .into());
     }
-    let root = models_dir().ok_or(text(
-        "OCR-Modelle fehlen. Verwende den Installer oder das vollständige Portable-Paket.",
-        "OCR models are missing. Use the installer or the complete portable package.",
-    ))?;
     control.progress(
         0.01,
         text("Lokale OCR-Modelle laden", "Loading local OCR models"),
     );
-    let engine = engine(&root)?;
-    // The single worker and small batches bound disk/memory usage. A new
-    // recording cancels this task instead of competing with game capture.
+    let reader = Reader::load()?;
     let staging = Snapshot::new(scratch, &[])?;
-    let crop = format!(
-        "crop=iw*{:.6}:ih*{:.6}:iw*{:.6}:ih*{:.6},fps=2,scale=960:-1",
-        region.width, region.height, region.left, region.top
-    );
-    let mut tracker = Tracker::default();
+    let mut tracker = crate::valorant::Tracker::default();
+    let mut rounds = crate::valorant::Rounds::default();
+    let mut moments = crate::valorant::Moments::new(crate::valorant::Preferences::default());
+    let mut found = Vec::new();
     let mut samples = 0;
     let mut recognized_rows = 0;
     let mut at = start;
     while at < end {
         control.check()?;
         let length = (end - at).min(10.0);
-        let mut cmd = command(ffmpeg);
-        cmd.args([
-            "-hide_banner",
-            "-v",
-            "error",
-            "-nostdin",
-            "-y",
-            "-threads",
-            "2",
-            "-ss",
-        ])
-        .arg(format!("{at:.6}"))
-        .arg("-i")
-        .arg(input)
-        .arg("-t")
-        .arg(format!("{length:.6}"))
-        .args(["-vf", &crop, "-an", "-threads", "2", "-frames:v", "20"])
-        .arg(staging.dir.join("frame-%03d.png"));
-        let result = control
-            .part(0.02 + 0.95 * (at - start) / (end - start), 0.0)
-            .run(&mut cmd, length, text("Killfeed lesen", "Reading killfeed"))?;
-        if !result.status.success() {
-            return Err(recorder::diagnostic(&result.stderr));
-        }
-        for frame in 1..=20 {
+        let frames = decode_frames(
+            ffmpeg,
+            input,
+            &staging.dir,
+            at,
+            length,
+            &control.part(0.02 + 0.95 * (at - start) / (end - start), 0.0),
+        )?;
+        for (index, path) in frames.iter().enumerate() {
             control.check()?;
-            let image = staging.dir.join(format!("frame-{frame:03}.png"));
-            if !image.is_file() {
-                break;
+            let time = (at + index as f64 * 0.5).min(end);
+            let pixels = image::open(path).map_err(|e| e.to_string())?.into_rgb8();
+            let observation = reader.observe(&pixels, player, region)?;
+            recognized_rows += observation.rows.len();
+            if rounds.frame(time, observation.score, observation.round_banner) {
+                moments.boundary();
             }
-            let pixels = image::open(&image).map_err(|e| e.to_string())?.into_rgb8();
-            let input = engine
-                .prepare_input(
-                    ImageSource::from_bytes(pixels.as_raw(), pixels.dimensions())
-                        .map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| e.to_string())?;
-            let boxes = engine.detect_words(&input).map_err(|e| e.to_string())?;
-            let lines = engine.find_text_lines(&input, &boxes);
-            let lines = engine
-                .recognize_text(&input, &lines)
-                .map_err(|e| e.to_string())?;
-            let mut words = Vec::new();
-            for line in lines.iter().flatten() {
-                for word in line.words() {
-                    let rect = word.bounding_rect();
-                    words.push(Word {
-                        text: word.to_string(),
-                        x: rect.left(),
-                        right: rect.right(),
-                        y: rect.top() + rect.height() / 2,
-                        height: rect.height(),
-                    });
-                }
+            for event in tracker.frame(time, &observation.rows) {
+                moments.event(event);
             }
-            let rows = own_kills(words, player);
-            recognized_rows += rows.len();
-            let time = (at + (frame - 1) as f64 * 0.5).min(end);
-            tracker.frame(
-                time,
-                &rows,
-                info.duration,
-                before.clamp(1.0, 120.0),
-                after.clamp(1.0, 60.0),
-            );
+            moments.advance(time);
+            found.extend(moments.take_ready(time, false));
             samples += 1;
-            fs::remove_file(image).map_err(|e| e.to_string())?;
+            fs::remove_file(path).map_err(|e| e.to_string())?;
             control.progress(
                 0.02 + 0.97 * (time - start) / (end - start),
                 text(
-                    "Killfeed lesen · experimentell",
-                    "Reading killfeed · experimental",
+                    "Highlights erkennen · experimentell",
+                    "Detecting highlights · experimental",
                 ),
             );
         }
         at += length;
     }
+    found.extend(moments.take_ready(info.duration, true));
     control.check()?;
+    let suggestions = found
+        .into_iter()
+        .map(|m| {
+            let at = m.events[0].at;
+            let last = m.events.last().unwrap().at;
+            let confidence = if m.confirmed_kills() == m.events.len() {
+                crate::valorant::Confidence::Confirmed
+            } else {
+                crate::valorant::Confidence::Review
+            };
+            Suggestion {
+                at,
+                start: (at - before.clamp(1.0, 120.0)).max(start),
+                end: (last + after.clamp(1.0, 60.0)).min(info.duration),
+                text: if m.events.len() == 1 {
+                    m.events[0].text.clone()
+                } else {
+                    m.label()
+                },
+                kills: m.events.len(),
+                events: m.events.iter().map(|e| e.at).collect(),
+                confidence,
+            }
+        })
+        .collect();
     Ok(Review {
-        suggestions: tracker.suggestions,
+        suggestions,
         samples,
         recognized_rows,
     })
@@ -369,32 +532,16 @@ mod tests {
     #[test]
     fn own_kill_requires_full_left_name_and_separate_victim() {
         assert_eq!(
-            own_kills(vec![word("Elvin", 10), word("Opponent", 250)], "Elvin").len(),
+            own_rows(vec![word("Elvin", 10), word("Opponent", 250)], "Elvin").len(),
             1
         );
-        assert!(own_kills(vec![word("Opponent", 10), word("Elvin", 250)], "Elvin").is_empty());
-        assert!(own_kills(vec![word("Elvin2", 10), word("Opponent", 250)], "Elvin").is_empty());
-        assert!(own_kills(vec![word("Elvin", 10)], "Elvin").is_empty());
-        assert!(own_kills(vec![word("Elvin", 10), word("Opponent", 85)], "Elvin").is_empty());
+        assert!(own_rows(vec![word("Opponent", 10), word("Elvin", 250)], "Elvin").is_empty());
+        assert!(own_rows(vec![word("Elvin2", 10), word("Opponent", 250)], "Elvin").is_empty());
+        assert!(own_rows(vec![word("Elvin", 10)], "Elvin").is_empty());
+        assert!(own_rows(vec![word("Elvin", 10), word("Opponent", 85)], "Elvin").is_empty());
         assert!(validate_name("ab").is_err());
         assert!(validate_name("プレイヤー").is_err());
     }
-    #[test]
-    fn persistent_lines_ocr_gaps_and_single_frame_noise_do_not_duplicate_kills() {
-        let mut tracker = Tracker::default();
-        let rows = vec!["Elvin → Opponent".into()];
-        tracker.frame(5.0, &rows, 30.0, 10.0, 5.0);
-        assert!(tracker.suggestions.is_empty());
-        tracker.frame(5.5, &rows, 30.0, 10.0, 5.0);
-        tracker.frame(6.0, &[], 30.0, 10.0, 5.0);
-        tracker.frame(7.0, &rows, 30.0, 10.0, 5.0);
-        assert_eq!(tracker.suggestions.len(), 1);
-        assert_eq!(tracker.suggestions[0].start, 0.0);
-        tracker.frame(20.0, &rows, 30.0, 10.0, 5.0);
-        tracker.frame(20.5, &rows, 30.0, 10.0, 5.0);
-        assert_eq!(tracker.suggestions.len(), 2);
-    }
-
     #[test]
     #[ignore = "requires bundled OCR models; synthetic image only"]
     fn synthetic_killfeed_models_read_killer_and_victim_positions() {
@@ -421,8 +568,8 @@ mod tests {
                 });
             }
         }
-        let own = own_kills(words.clone(), "Elvin");
+        let own = own_rows(words.clone(), "Elvin");
         assert_eq!(own.len(), 1, "Recognized words: {words:?}");
-        assert!(own[0].contains("Opponent"), "{own:?}");
+        assert!(own[0].text.contains("Opponent"), "{own:?}");
     }
 }

@@ -5,6 +5,8 @@
 mod audio_editor;
 mod desktop;
 mod killfeed;
+mod valorant;
+mod auto_highlights;
 mod setup;
 mod support;
 mod updater;
@@ -91,6 +93,7 @@ pub enum AppEvent {
     ScreenshotFinished(Result<(), String>),
     DesktopFinished(u64, Result<desktop::Output, String>),
     ReportReady(u64, Value),
+    AutoHighlights(auto_highlights::Event),
 }
 
 pub struct JobOutcome {
@@ -130,6 +133,7 @@ struct Notice {
 
 struct App {
     desktop: desktop::Desktop,
+    auto_highlights: auto_highlights::State,
     config: PathBuf,
     settings: Settings,
     session_settings: Option<Settings>,
@@ -213,6 +217,7 @@ impl App {
         let free_bytes = platform::free_bytes(&settings.clips_dir).unwrap_or(0);
         let mut app = Self {
             desktop: desktop::Desktop::default(),
+            auto_highlights: auto_highlights::State::default(),
             index: Index::load(&config),
             config,
             settings,
@@ -673,6 +678,7 @@ impl App {
             "diagnostics": self.recorder.as_ref().and_then(|r| r.diagnostics()),
             "markers": self.marker_json(),
             "buffer_bytes": self.buffer_bytes,
+            "auto_highlights": self.auto_highlights.state(),
             "free_bytes": self.free_bytes,
             "clips_bytes": self.clips_bytes,
             "max_volume": settings::MAX_VOLUME,
@@ -849,6 +855,11 @@ impl App {
     /// starting is retained; probing also cannot resurrect a cancelled start.
     fn advance_capture(&mut self, proxy: EventLoopProxy<AppEvent>) {
         if self.desktop.task.is_some() { return; }
+        if !self.recording && self.capture.wants_start() && self.auto_highlights.running() {
+            self.auto_highlights.cancel();
+            self.status = i18n::text("Highlight-Verarbeitung wird beendet, danach startet die Aufnahme.", "Stopping highlight processing before starting recording.").into();
+            return;
+        }
         if self.capture.wants_start() && !self.capabilities.probed && self.ffmpeg.is_some() {
             self.status = crate::i18n::text("FFmpeg wird geprüft, die Aufnahme startet gleich…", "Checking FFmpeg. Recording will start shortly…").into();
             return;
@@ -887,6 +898,7 @@ impl App {
         .into();
         let marks: Vec<f64> = self.markers.iter().map(|marker| marker.at).collect();
         let elapsed = self.elapsed as f64;
+        let auto_tail = (!start).then(|| self.auto_highlights.tail_id()).flatten();
         std::thread::spawn(move || {
             let result = if let Some(config) = config {
                 recorder.start(config).map(|info| JobOutcome {
@@ -896,7 +908,14 @@ impl App {
                     replay: false,
                 })
             } else {
-                recorder.stop().map(|saved| {
+                let stopped = recorder.stop_with_highlights(auto_tail.is_some());
+                if let (Some(id),Err(error)) = (auto_tail,&stopped) {
+                    let _ = proxy.send_event(AppEvent::AutoHighlights(auto_highlights::Event::Tail(id,Err(error.clone()))));
+                }
+                stopped.map(|(saved,tail)| {
+                    if let (Some(id),Some(tail)) = (auto_tail,tail) {
+                        let _ = proxy.send_event(AppEvent::AutoHighlights(auto_highlights::Event::Tail(id,tail)));
+                    }
                     if let Some(path) = &saved {
                         send_markers(&proxy, path, &marks, 0.0, elapsed + 5.0);
                     }
@@ -1021,6 +1040,7 @@ impl App {
     /// Reacts to something the recorder reported by itself: a capture that died
     /// is started again a few times, a nearly full drive ends the recording.
     fn handle_issue(&mut self, issue: recorder::PollIssue, proxy: EventLoopProxy<AppEvent>) {
+        if !issue.stop_requested { self.auto_highlights.cancel(); }
         self.message(Err(issue.message.clone()));
         self.notify(&issue.message, true, None);
         if issue.stop_requested {
@@ -1083,7 +1103,7 @@ impl App {
         command: &Value,
         proxy: EventLoopProxy<AppEvent>,
     ) -> Result<(), String> {
-        if self.audio_test.active.is_some() || self.recording || self.capture.transitioning || self.desktop.task.is_some() {
+        if self.audio_test.active.is_some() || self.recording || self.capture.transitioning || self.desktop.task.is_some() || self.auto_highlights.running() {
             return Err(crate::i18n::text("Beende zuerst die Aufnahme oder den laufenden Audio-Test.", "Stop the recording or running audio test first.").into());
         }
         let ffmpeg = self
@@ -1249,8 +1269,13 @@ impl App {
         if settings.clips_dir.as_os_str().is_empty() {
             settings.clips_dir = self.settings.clips_dir.clone();
         }
+        settings.desktop = match settings.desktop.clone().validate() { Ok(prefs) => prefs, Err(error) => { self.message(Err(error)); return; } };
         let settings = settings.sanitized();
-        if (!self.exports.is_empty() || self.desktop.task.is_some()) && settings.clips_dir != self.settings.clips_dir {
+        if (self.recording || self.capture.transitioning || self.capture.wants_start() || self.auto_highlights.running())
+            && (settings.desktop.highlights != self.settings.desktop.highlights || settings.desktop.player_name != self.settings.desktop.player_name || settings.desktop.killfeed_region != self.settings.desktop.killfeed_region) {
+            self.message(Err(i18n::text("Beende zuerst die Aufnahme und die Highlight-Erkennung.", "Finish recording and highlight detection first.").into())); return;
+        }
+        if (!self.exports.is_empty() || self.desktop.task.is_some() || self.auto_highlights.running()) && settings.clips_dir != self.settings.clips_dir {
             self.message(Err(
                 crate::i18n::text("Beende zuerst die Exportliste, bevor du den Clip-Ordner änderst.", "Finish the export queue before changing the clips folder.").into(),
             ));
@@ -1369,7 +1394,7 @@ impl App {
         if matches!(action, "choose_folder" | "choose_ffmpeg")
             && (!self.exports.is_empty()
                 || self.audio_test.active.is_some()
-                || self.dragging.is_some() || self.desktop.task.is_some())
+                || self.dragging.is_some() || self.desktop.task.is_some() || self.auto_highlights.running())
         {
             self.message(Err(crate::i18n::text("Beende zuerst die Exportliste.", "Finish the export queue first.").into()));
             return;
@@ -1848,6 +1873,7 @@ impl App {
                 }
                 if outcome.session.is_some() {
                     self.session = outcome.session;
+                    self.start_auto_highlights(proxy.clone());
                 }
             }
             Err(error) => {
@@ -2135,6 +2161,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 app.sync(&view);
             }
+            Event::UserEvent(AppEvent::AutoHighlights(event)) => {
+                app.handle_auto_highlights(event,proxy.clone());
+                app.sync(&view);
+            }
             Event::UserEvent(AppEvent::ReportReady(id, report)) => {
                 if id == app.desktop.report_sequence { app.desktop.report = Some(report); app.sync(&view); }
             }
@@ -2210,7 +2240,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     TrayAction::Quit => {
                         app.closing = true;
                         app.cancel_background();
-                        if app.busy || app.capture.transitioning || !app.exports.is_empty() || app.audio_test.active.is_some() || app.dragging.is_some() || app.desktop.task.is_some() {
+                        if app.busy || app.capture.transitioning || !app.exports.is_empty() || app.audio_test.active.is_some() || app.dragging.is_some() || app.desktop.task.is_some() || app.auto_highlights.running() {
                             app.capture.request(false);
                             app.advance_capture(proxy.clone());
                             app.status = crate::i18n::text("Vorgang wird abgeschlossen, danach schließt Stillclip…", "Finishing the current operation before quitting Stillclip…").into();
@@ -2300,12 +2330,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Event::UserEvent(AppEvent::ExportFinished(id, result)) => {
                 app.finish_export(id, result, proxy.clone()); app.sync(&view);
-                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() && app.desktop.task.is_none() { *control_flow = ControlFlow::Exit; }
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() && app.desktop.task.is_none() && !app.auto_highlights.running() { *control_flow = ControlFlow::Exit; }
             }
             Event::UserEvent(AppEvent::Finished(result)) => {
                 app.finish(result, proxy.clone());
                 app.sync(&view);
-                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() && app.desktop.task.is_none() {
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() && app.desktop.task.is_none() && !app.auto_highlights.running() {
                     *control_flow = ControlFlow::Exit;
                 }
             }
@@ -2328,7 +2358,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     app.closing = true;
                     app.cancel_background();
-                    if app.busy || app.capture.transitioning || !app.exports.is_empty() || app.audio_test.active.is_some() || app.dragging.is_some() || app.desktop.task.is_some() {
+                    if app.busy || app.capture.transitioning || !app.exports.is_empty() || app.audio_test.active.is_some() || app.dragging.is_some() || app.desktop.task.is_some() || app.auto_highlights.running() {
                         app.capture.request(false);
                         app.advance_capture(proxy.clone());
                         app.status = crate::i18n::text("Vorgang wird abgeschlossen, danach schließt Stillclip…", "Finishing the current operation before quitting Stillclip…").into();
@@ -2365,7 +2395,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         std::process::exit(1);
                     }
                 }
-                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() && app.desktop.task.is_none() { *control_flow = ControlFlow::Exit; }
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() && app.desktop.task.is_none() && !app.auto_highlights.running() { *control_flow = ControlFlow::Exit; }
                 if app.audio_test.active.is_some() { app.audio_test.poll(); app.sync(&view); }
                 if !checking { app.update_hud(); }
                 if app.desktop.task.is_some() { app.sync(&view); }
@@ -2404,6 +2434,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Event::LoopDestroyed => {
+                app.auto_highlights.cancel();
                 app.cancel_background();
                 app.desktop.preview = None;
                 app.desktop.audio_preview = None;

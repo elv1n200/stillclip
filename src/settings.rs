@@ -505,6 +505,7 @@ impl Settings {
 
     /// Clamps every numeric value into its supported range.
     pub fn sanitized(mut self) -> Self {
+        self.desktop.highlights = self.desktop.highlights.clone().sanitized();
         if self.clips_dir.as_os_str().is_empty() {
             self.clips_dir = Settings::default().clips_dir;
         }
@@ -568,6 +569,7 @@ impl Settings {
         self.replay_seconds
             .max(self.replay_seconds_long)
             .max(self.marker_before + self.marker_after)
+            .max(if self.desktop.highlights.enabled { crate::valorant::RETAIN_SECONDS } else { 0 })
     }
 
     /// Free space the recorder insists on, in bytes.
@@ -726,6 +728,26 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn automatic_highlights_are_opt_in_persistent_and_keep_enough_video() {
+        let old: Settings = serde_json::from_str(r#"{"desktop":{"player_name":"Elvin"}}"#).unwrap();
+        assert!(!old.desktop.highlights.enabled);
+        assert_eq!(old.buffer_seconds(),30);
+        let directory = TestDir::new();
+        let mut settings = old;
+        settings.desktop.highlights.enabled = true;
+        settings.desktop.highlights.min_kills = 3;
+        assert_eq!(settings.buffer_seconds(),crate::valorant::RETAIN_SECONDS);
+        save_settings(&directory.0,&settings).unwrap();
+        assert_eq!(load_settings(&directory.0),settings);
+        settings.replay_seconds = 300;
+        assert_eq!(settings.buffer_seconds(),300);
+        settings.desktop.player_name.clear();
+        assert!(settings.desktop.clone().validate().is_err());
+        settings.desktop.highlights.enabled = false;
+        assert!(settings.desktop.validate().is_ok());
     }
 
     #[test]

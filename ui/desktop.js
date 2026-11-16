@@ -36,6 +36,21 @@
     region: ['Killfeed-Bereich anpassen (%)', 'Adjust killfeed region (%)'], left: ['Links', 'Left'], top: ['Oben', 'Top'], width: ['Breite', 'Width'], height: ['Höhe', 'Height'],
     scan: ['Bereich analysieren', 'Analyze selection'], preview: ['Bereich ansehen', 'Preview range'], accept: ['Markierung übernehmen', 'Keep marker'], accepted: ['Übernommen', 'Kept'],
     noSuggestions: ['Keine bestätigten Vorschläge. Prüfe den Namen und den Killfeed-Bereich; die Erkennung kann Szenen übersehen.', 'No confirmed suggestions. Check the name and killfeed region; detection can miss scenes.'],
+    settingsTiming: ['Clip-Zeitfenster', 'Clip timing'],
+    autoTitle: ['VALORANT · Automatische Highlights', 'VALORANT · automatic highlights'],
+    autoEnable: ['Bestätigte Highlights automatisch speichern', 'Save confirmed highlights automatically'],
+    autoHelp: ['Einmal deinen sichtbaren Namen eintragen, aktivieren und VALORANT aufnehmen. Zusammengehörige Kills werden als Clip gespeichert. Experimentell: Szenen können übersehen werden. Die Erkennung läuft lokal und benötigt zusätzliche Rechenleistung.', 'Enter your visible name once, enable detection and record VALORANT. Related kills are saved as one clip. Experimental: moments can be missed. Detection runs locally and uses additional processing power.'],
+    autoGameHelp: ['Für den vollständigen Ablauf aktiviere unter Spiele auch „Aufnahme automatisch starten“. Der Rückblick hält bei aktivierten Highlights mindestens zwei Minuten bereit.', 'For the full workflow, also enable automatic recording under Games. With highlights enabled, the replay buffer retains at least two minutes.'],
+    minimumKills: ['Mindestens erkannte Kills', 'Minimum detected kills'], beforeClip: ['Vorlauf (Sekunden)', 'Before the first kill (seconds)'], afterClip: ['Nachlauf (Sekunden)', 'After the last kill (seconds)'], mergeGap: ['Kills verbinden bis (Sekunden Abstand)', 'Join kills up to (seconds apart)'],
+    autoPause: ['Erkennung für diese Aufnahme pausieren', 'Pause detection for this recording'],
+    autoDisabled: ['Ausgeschaltet', 'Disabled'], autoWaiting: ['Bereit für die nächste VALORANT-Aufnahme', 'Ready for the next VALORANT recording'],
+    autoLoading: ['Erkennung wird geladen', 'Loading detection'], autoWatching: ['Erkennung läuft', 'Watching for highlights'], autoSaving: ['Highlight wird gespeichert', 'Saving highlight'],
+    autoFinishing: ['Letzte Szenen werden verarbeitet', 'Processing the final moments'], autoBehind: ['Erkennung läuft verzögert', 'Detection is running behind'],
+    autoCancelling: ['Erkennung wird angehalten', 'Pausing detection'], autoPaused: ['Für diese Aufnahme pausiert', 'Paused for this recording'], autoComplete: ['Aufnahme ausgewertet', 'Recording processed'], autoError: ['Erkennung pausiert', 'Detection paused'],
+    detectedKills: ['erkannte Kills', 'detected kills'], savedHighlights: ['gespeicherte Highlights', 'saved highlights'], skippedRanges: ['übersprungene Bereiche', 'skipped ranges'],
+    confirmed: ['Mehrfach bestätigt', 'Repeatedly confirmed'], reviewOnly: ['Unsichere Erkennung · bitte prüfen', 'Uncertain detection · please review'],
+    calibrate: ['Killfeed im Bild markieren', 'Select killfeed in the frame'], calibrationHelp: ['Ziehe einen Rahmen um den Killfeed. Wähle einen Zeitpunkt, an dem er sichtbar ist. Die Prozentfelder bleiben zur genauen Eingabe verfügbar.', 'Drag a rectangle around the killfeed. Choose a frame where it is visible. The percentage fields remain available for precise input.'],
+    applyRegion: ['Bereich übernehmen', 'Apply region'], resetRegion: ['Standardbereich', 'Default region'],
     noModels: ['OCR-Modelle fehlen. Nutze den Installer oder das vollständige Portable-Paket.', 'OCR models are missing. Use the installer or the complete portable package.'],
   };
   const t = key => copy[key]?.[document.documentElement.lang === 'en' ? 1 : 0] || key;
@@ -56,6 +71,14 @@
       <div class="desktop-row"><label for="hud-position">${label('position')}</label><select id="hud-position"><option value="top_left" data-copy="tl"></option><option value="top_right" data-copy="tr"></option><option value="bottom_left" data-copy="bl"></option><option value="bottom_right" data-copy="br"></option></select></div>
       <div class="desktop-row"><label for="hud-scale">${label('scale')}</label><input id="hud-scale" type="range" min="60" max="160" step="5"><output id="hud-scale-value"></output></div>
       <p class="desktop-help">${label('hudHelp')}</p>
+      <h3>${label('autoTitle')}</h3><p class="setup-kicker">${label('experimental')}</p>
+      <p class="desktop-help">${label('autoHelp')}</p>
+      <div class="desktop-row"><label for="auto-player">${label('player')}</label><input id="auto-player" maxlength="32" autocomplete="off" spellcheck="false"></div><p class="desktop-help">${label('playerHelp')}</p>
+      <label class="desktop-check"><input type="checkbox" id="auto-enabled">${label('autoEnable')}</label>
+      <div class="desktop-row"><label for="auto-min-kills">${label('minimumKills')}</label><select id="auto-min-kills">${[1,2,3,4,5].map(n=>`<option value="${n}">${n}</option>`).join('')}</select></div>
+      <details><summary>${label('settingsTiming')}</summary><div class="auto-timing">${[['before','beforeClip',3,25],['after','afterClip',2,15],['merge-gap','mergeGap',3,15]].map(([id,key,min,max])=>`<div class="desktop-row"><label for="auto-${id}">${label(key)}</label><input id="auto-${id}" type="number" min="${min}" max="${max}" step="1"></div>`).join('')}</div></details>
+      <p class="desktop-help">${label('autoGameHelp')}</p><p id="auto-status" role="status"></p><p id="auto-error" class="desktop-error" role="alert"></p>
+      <div class="desktop-actions">${button('auto-pause','autoPause')}</div>
       <h3>${label('updates')}</h3><label class="desktop-check"><input type="checkbox" id="automatic-updates">${label('autoUpdate')}</label>
       <p class="desktop-help">${label('updateHelp')}</p><p id="update-summary" role="status"></p>
       <div class="desktop-actions">${button('update-check','check')}${button('update-download','download')}${button('update-install','install')}</div>
@@ -92,17 +115,56 @@
     <div class="desktop-actions">${button('audio-analyze','analyzeAudio')}</div><div id="audio-waveforms"></div><div class="desktop-actions">${button('audio-listen-mix','listenMix')}${button('audio-save-mix','saveMix')}</div><audio id="mix-preview" controls preload="metadata" hidden></audio>
   </details><details class="desktop-tools" id="killfeed-tools"><summary>${label('suggestions')}</summary><p class="setup-kicker">${label('experimental')}</p><p class="desktop-help">${label('killfeedHelp')}</p>
     <div class="desktop-row"><label for="killfeed-player">${label('player')}</label><input id="killfeed-player" maxlength="32" autocomplete="off" spellcheck="false"></div><p class="desktop-help">${label('playerHelp')}</p>
-    <details><summary>${label('region')}</summary><div class="killfeed-region">${['left','top','width','height'].map(k => `<label for="killfeed-${k}">${label(k)}<input id="killfeed-${k}" type="number" min="0" max="100" step="1"></label>`).join('')}</div></details>
-    <div class="desktop-actions">${button('killfeed-analyze','scan')}</div><p id="killfeed-summary" class="desktop-help" role="status"></p><ol id="killfeed-suggestions" class="killfeed-suggestions"></ol>
+    <details><summary>${label('region')}</summary><div class="killfeed-region">${['left','top','width','height'].map(k => `<label for="killfeed-${k}">${label(k)}<input id="killfeed-${k}" type="number" min="0" max="100" step="0.01"></label>`).join('')}</div></details>
+    <div class="desktop-actions">${button('killfeed-analyze','scan')}${button('killfeed-calibrate','calibrate')}</div><p id="killfeed-summary" class="desktop-help" role="status"></p><ol id="killfeed-suggestions" class="killfeed-suggestions"></ol>
   </details><div class="desktop-progress" id="editor-desktop-progress" hidden><div class="desktop-actions"><span id="editor-desktop-phase" role="status"></span>${button('editor-desktop-cancel','cancel')}</div></div><p id="desktop-editor-error" class="desktop-error" role="alert"></p>`, document.querySelector('.editor-body'));
 
+  create(`<div class="setup-backdrop" id="region-backdrop" hidden><section class="setup-dialog setup-region" role="dialog" aria-modal="true" aria-labelledby="region-title"><div class="setup-header"><h2 id="region-title">${label('calibrate')}</h2>${button('region-close','close')}</div><p class="desktop-help">${label('calibrationHelp')}</p><canvas id="region-canvas" width="960" height="540" aria-label="Killfeed selection"></canvas><p id="region-values" class="desktop-help"></p><div class="desktop-actions">${button('region-reset','resetRegion')}${button('region-apply','applyRegion','btn-primary')}</div></section></div>`,document.body);
+  create(`<div class="auto-library" id="auto-library" hidden><span id="auto-library-status" role="status"></span>${button('auto-library-pause','autoPause')}</div>`,$('page-library'));
+  $('page-library').prepend($('auto-library'));
+  let selectedRegion = null, regionAnchor = null;
+  const autoLocked = () => !!(state.recording || state.capture_busy || state.capture_pending || state.auto_highlights?.running);
+  function autoStatus() {
+    const automatic = state.auto_highlights || {};
+    const phase = {loading:'autoLoading',watching:'autoWatching',saving:'autoSaving',finishing:'autoFinishing',behind:'autoBehind',cancelling:'autoCancelling',paused:'autoPaused',complete:'autoComplete',error:'autoError'}[automatic.phase];
+    const status = !state.settings?.desktop?.highlights?.enabled && !automatic.running ? t('autoDisabled') : t(phase || 'autoWaiting');
+    const stats = [status];
+    if(automatic.detected || automatic.saved || automatic.running) stats.push(`${automatic.detected||0} ${t('detectedKills')}`,`${automatic.saved||0} ${t('savedHighlights')}`);
+    if(automatic.skipped) stats.push(`${automatic.skipped} ${t('skippedRanges')}`);
+    if(automatic.lag_seconds > 10) stats.push(`+${automatic.lag_seconds}s`);
+    return stats.join(' · ');
+  }
+  function drawRegion() {
+    if(!selectedRegion)return;
+    const canvas=$('region-canvas'),ctx=canvas.getContext('2d'),video=$('editor-video');
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+    const r=selectedRegion,x=r.left*canvas.width,y=r.top*canvas.height,w=r.width*canvas.width,h=r.height*canvas.height;
+    ctx.fillStyle='#e5a0b733';ctx.fillRect(x,y,w,h);ctx.strokeStyle='#e5a0b7';ctx.lineWidth=3;ctx.strokeRect(x,y,w,h);
+    $('region-values').textContent=`${Math.round(r.left*100)}%, ${Math.round(r.top*100)}% · ${Math.round(r.width*100)}% × ${Math.round(r.height*100)}%`;
+  }
+  function closeRegion(){ $('region-backdrop').hidden=true;regionAnchor=null;previousFocus?.focus(); }
+  $('killfeed-calibrate').addEventListener('click',()=>{
+    const video=$('editor-video');if(!video.videoWidth||!idle())return;video.pause();previousFocus=document.activeElement;
+    selectedRegion=structuredClone(prefs().killfeed_region||{left:.55,top:.02,width:.44,height:.30});
+    const canvas=$('region-canvas');canvas.width=960;canvas.height=Math.round(960*video.videoHeight/video.videoWidth);
+    $('region-backdrop').hidden=false;drawRegion();$('region-close').focus();
+  });
+  const point=event=>{const r=$('region-canvas').getBoundingClientRect();return {x:Math.max(0,Math.min(1,(event.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(event.clientY-r.top)/r.height))};};
+  $('region-canvas').addEventListener('pointerdown',event=>{regionAnchor=point(event);$('region-canvas').setPointerCapture(event.pointerId);});
+  $('region-canvas').addEventListener('pointermove',event=>{if(!regionAnchor)return;const p=point(event),w=Math.max(.1,Math.abs(p.x-regionAnchor.x)),h=Math.max(.05,Math.abs(p.y-regionAnchor.y));selectedRegion={left:Math.min(1-w,Math.min(p.x,regionAnchor.x)),top:Math.min(1-h,Math.min(p.y,regionAnchor.y)),width:w,height:h};drawRegion();});
+  for(const event of ['pointerup','pointercancel','lostpointercapture'])$('region-canvas').addEventListener(event,()=>{regionAnchor=null;});
+  $('region-close').addEventListener('click',closeRegion);
+  $('region-reset').addEventListener('click',()=>{selectedRegion={left:.55,top:.02,width:.44,height:.30};drawRegion();});
+  $('region-apply').addEventListener('click',()=>{if(!selectedRegion||!idle())return;for(const k of ['left','top','width','height'])$('killfeed-'+k).value=(selectedRegion[k]*100).toFixed(2);savePreferences();closeRegion();});
+
   function translate() { document.querySelectorAll('[data-copy]').forEach(node => { node.textContent = t(node.dataset.copy); }); }
-  function idle() { return !state.recording && !state.busy && !state.capture_busy && !state.capture_pending && !state.exports?.length && !state.audio_test?.running && !state.dragging && !state.desktop?.task; }
+  function idle() { return !state.recording && !state.busy && !state.capture_busy && !state.capture_pending && !state.exports?.length && !state.audio_test?.running && !state.dragging && !state.desktop?.task && !state.auto_highlights?.running; }
   function prefs() { return structuredClone(state.settings?.desktop || {}); }
   function savePreferences() {
     const next = prefs(); next.hud_enabled = $('hud-enabled').checked; next.hud_position = $('hud-position').value;
     next.hud_scale = Number($('hud-scale').value); next.automatic_updates = $('automatic-updates').checked;
     next.player_name = $('killfeed-player').value.trim();
+    next.highlights = {enabled:$('auto-enabled').checked,min_kills:Number($('auto-min-kills').value),before:Number($('auto-before').value),after:Number($('auto-after').value),merge_gap:Number($('auto-merge-gap').value)};
     next.killfeed_region = Object.fromEntries(['left','top','width','height'].map(k => [k, Number($('killfeed-' + k).value) / 100]));
     ipc('desktop_preferences', { preferences: next });
   }
@@ -179,6 +241,7 @@
     }
   }
   function renderReview() {
+    $('killfeed-calibrate').disabled=!selected||!idle();
     const review = selected && state.desktop?.review?.clip === selected.id ? state.desktop.review : null;
     const key = JSON.stringify([review, document.documentElement.lang]);
     $('killfeed-analyze').disabled = !selected || !idle() || !state.desktop?.models_available || !$('killfeed-player').value.trim();
@@ -186,7 +249,7 @@
     if (key === reviewKey) return; reviewKey = key; $('killfeed-suggestions').replaceChildren();
     (review?.result?.suggestions || []).forEach((suggestion,index) => {
       const row = document.createElement('li'); const info = document.createElement('span'); info.className = 'suggestion-text';
-      info.textContent = `${Math.floor(suggestion.at/60)}:${String(Math.floor(suggestion.at%60)).padStart(2,'0')} · ${suggestion.text}`;
+      info.textContent = `${Math.floor(suggestion.at/60)}:${String(Math.floor(suggestion.at%60)).padStart(2,'0')} · ${suggestion.text}${suggestion.confidence ? ' · '+t(suggestion.confidence==='confirmed'?'confirmed':'reviewOnly') : ''}`;
       const preview = document.createElement('button'); preview.className = 'btn small'; preview.textContent = t('preview'); preview.addEventListener('click', () => window.selectEditorRange?.(suggestion.start,suggestion.end,suggestion.at));
       const accept = document.createElement('button'); accept.className = 'btn small'; accept.disabled = review.accepted.includes(index); accept.textContent = t(accept.disabled ? 'accepted' : 'accept');
       accept.addEventListener('click', () => ipc('killfeed_accept',{id:selected.id,suggestion:index})); row.append(info,preview,accept); $('killfeed-suggestions').append(row);
@@ -199,7 +262,18 @@
     const bind = (id,value) => { if (document.activeElement !== $(id)) { if ($(id).type === 'checkbox') $(id).checked = value; else $(id).value = value; } };
     bind('hud-enabled',preferences.hud_enabled); bind('hud-position',preferences.hud_position); bind('hud-scale',preferences.hud_scale); $('hud-scale-value').textContent = preferences.hud_scale + '%';
     bind('automatic-updates',preferences.automatic_updates); bind('killfeed-player',preferences.player_name);
-    for (const k of ['left','top','width','height']) bind('killfeed-'+k,Math.round((preferences.killfeed_region?.[k] || 0)*100));
+    bind('auto-player',preferences.player_name);
+    const automatic=preferences.highlights||{};bind('auto-enabled',!!automatic.enabled);bind('auto-min-kills',automatic.min_kills||2);bind('auto-before',automatic.before||12);bind('auto-after',automatic.after||6);bind('auto-merge-gap',automatic.merge_gap||8);
+    for(const id of ['auto-player','auto-enabled','auto-min-kills','auto-before','auto-after','auto-merge-gap','killfeed-player',...['left','top','width','height'].map(k=>'killfeed-'+k)])$(id).disabled=autoLocked();
+    $('auto-enabled').disabled=autoLocked()||!preferences.player_name?.trim()||desktop.models_available===false;
+    $('auto-status').textContent=$('auto-library-status').textContent=autoStatus();
+    $('auto-error').textContent=state.auto_highlights?.error||'';
+    $('auto-library').hidden=!automatic.enabled&&!state.auto_highlights?.running&&!state.auto_highlights?.saved;
+    for(const id of ['auto-pause','auto-library-pause'])$(id).hidden=!state.auto_highlights?.running;
+    for(const id of ['auto-pause','auto-library-pause'])$(id).disabled=state.auto_highlights?.phase==='cancelling';
+    $('killfeed-calibrate').disabled=!selected||!idle();
+    $('region-apply').disabled=!idle();
+    for (const k of ['left','top','width','height']) bind('killfeed-'+k,Number(((preferences.killfeed_region?.[k] || 0)*100).toFixed(2)));
     $('setup-open').disabled = !idle(); $('update-check').disabled = !idle(); $('update-download').disabled = !idle(); $('update-install').disabled = !idle();
     const update = desktop.update || {}, release = update.release;
     $('update-summary').textContent = release ? `Stillclip ${release.version}` : update.checked ? (document.documentElement.lang === 'en' ? 'You are up to date.' : 'Du bist auf dem neuesten Stand.') : '';
@@ -223,6 +297,9 @@
   $('wizard-test').addEventListener('click',()=>{$('wizard-preview').pause();readWizard();ipc('setup_test',{settings:wizard});});
   $('wizard-finish').addEventListener('click',()=>{readWizard();finishPending=true;ipc('setup_finish',{settings:wizard});});
   for (const id of ['desktop-cancel','editor-desktop-cancel','wizard-cancel']) $(id).addEventListener('click',()=>ipc('desktop_cancel'));
+  $('auto-player').addEventListener('change',()=>{$('killfeed-player').value=$('auto-player').value;savePreferences();});
+  for(const id of ['auto-enabled','auto-min-kills','auto-before','auto-after','auto-merge-gap'])$(id).addEventListener('change',savePreferences);
+  for(const id of ['auto-pause','auto-library-pause'])$(id).addEventListener('click',()=>ipc('auto_highlights_pause'));
   for (const id of ['hud-enabled','hud-position','hud-scale','automatic-updates','killfeed-player',...['left','top','width','height'].map(k=>'killfeed-'+k)]) $(id).addEventListener('change',savePreferences);
   $('hud-scale').addEventListener('input',()=>{$('hud-scale-value').textContent=$('hud-scale').value+'%';});
   for (const kind of ['check','download','install']) $('update-'+kind).addEventListener('click',()=>ipc('update_'+kind));
@@ -236,8 +313,8 @@
   $('editor-video').addEventListener('play',()=> $('mix-preview').pause());
   $('killfeed-analyze').addEventListener('click',()=>{ const ctx=window.getEditorContext?.();if(ctx){savePreferences();ipc('killfeed_analyze',{id:ctx.id,start:ctx.start,end:ctx.end});} });
   document.addEventListener('keydown',event=>{
-    const modal=!$('report-backdrop').hidden?$('report-backdrop'):!$('setup-backdrop').hidden?$('setup-backdrop'):null;if(!modal)return;
-    if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();modal.id==='report-backdrop'?closeReport():closeWizard();}
+    const modal=!$('region-backdrop').hidden?$('region-backdrop'):!$('report-backdrop').hidden?$('report-backdrop'):!$('setup-backdrop').hidden?$('setup-backdrop'):null;if(!modal)return;
+    if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();modal.id==='region-backdrop'?closeRegion():modal.id==='report-backdrop'?closeReport():closeWizard();}
     if(event.key==='Tab'){const nodes=[...modal.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea,video[controls]')].filter(n=>n.getClientRects().length);const first=nodes[0],last=nodes.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
   },true);
   window.StillclipDesktop = {

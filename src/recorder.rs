@@ -366,6 +366,11 @@ impl Recorder {
             .map_or(Duration::ZERO, |s| s.started.elapsed())
     }
 
+    pub fn highlight_source(&self) -> Option<crate::auto_highlights::Source> {
+        let session = self.session.as_ref()?;
+        Some(crate::auto_highlights::Source { directory: session.dir.clone(), list: session.list_path.clone(), clips: session.clips_dir.clone(), ffmpeg: self.ffmpeg.clone() })
+    }
+
     /// Bytes currently held in the segment buffer.
     pub fn buffer_bytes(&self) -> u64 {
         self.session
@@ -675,6 +680,10 @@ impl Recorder {
 
     /// Stops recording. Returns the full-session video when that mode is on.
     pub fn stop(&mut self) -> Result<Option<PathBuf>, String> {
+        self.stop_with_highlights(false).map(|(saved,_)| saved)
+    }
+
+    pub fn stop_with_highlights(&mut self, preserve_tail: bool) -> Result<(Option<PathBuf>, Option<Result<crate::export::Snapshot,String>>),String> {
         let mut session = self.session.take().ok_or(crate::i18n::text("Es läuft keine Aufnahme.", "No recording is running."))?;
         let status = finish_process(&mut session.child, Duration::from_secs(30));
         for pipe in &mut session.audio {
@@ -691,6 +700,14 @@ impl Recorder {
                 "FFmpeg hat die Aufnahme nicht sauber beendet ({status}). {detail}", "FFmpeg did not finish recording cleanly ({status}). {detail}"
             ));
         }
+        // Finalize FFmpeg first, then link completed segments before deleting
+        // the live ring. This includes a short final segment at game exit.
+        let tail = preserve_tail.then(|| {
+            let segments = scan_segments(&session.dir,&session.list_path);
+            let end = segments.iter().filter_map(|s| s.end).fold(0.0,f64::max);
+            let chosen = span_segments(&segments,(end-crate::valorant::RETAIN_SECONDS as f64).max(0.0),end);
+            crate::export::Snapshot::new(&session.clips_dir,&chosen)
+        });
         let mut saved = None;
         if session.keep_full {
             let segments = scan_segments(&session.dir, &session.list_path);
@@ -703,7 +720,7 @@ impl Recorder {
             saved = Some(output);
         }
         let _ = fs::remove_dir_all(&session.dir);
-        Ok(saved)
+        Ok((saved,tail))
     }
 
     /// Saves the last `seconds` of the running recording as a new clip.
@@ -1090,6 +1107,14 @@ pub(crate) fn export_span(
     gop: f64,
     output: &Path,
 ) -> Result<f64, String> {
+    export_span_controlled(ffmpeg,ffprobe,segments,from,to,gop,output,None)
+}
+
+pub(crate) fn export_span_controlled(
+    ffmpeg: &Path, ffprobe: Option<&Path>, segments: &[Segment], from: f64,
+    to: f64, gop: f64, output: &Path, control: Option<&crate::jobs::Control>,
+) -> Result<f64, String> {
+    if let Some(control) = control { control.check()?; }
     let first = segments
         .first()
         .ok_or(crate::i18n::text("Keine Segmente zum Sichern vorhanden.", "No segments available to save."))?;
@@ -1152,7 +1177,7 @@ pub(crate) fn export_span(
     if cut > 0.05 {
         export.arg("-ss").arg(format!("{cut:.6}"));
     }
-    let result = export
+    export
         .args(["-i", &input, "-t"])
         .arg(format!("{length:.6}"))
         .args([
@@ -1167,9 +1192,12 @@ pub(crate) fn export_span(
             "-f",
             "mp4",
         ])
-        .arg(output)
-        .output()
-        .map_err(|error| crate::tr_format!("Der Clip konnte nicht gespeichert werden: {error}", "Could not save clip: {error}"))?;
+        .arg(output);
+    let result = if let Some(control) = control {
+        control.run(&mut export,length,crate::i18n::text("Highlight speichern", "Saving highlight"))?
+    } else {
+        export.output().map_err(|error| crate::tr_format!("Der Clip konnte nicht gespeichert werden: {error}", "Could not save clip: {error}"))?
+    };
     if !result.status.success() {
         return Err(crate::tr_format!(
             "Der Clip konnte nicht gespeichert werden. {}", "Could not save clip. {}",
@@ -2194,6 +2222,42 @@ capabilities {capabilities:?}"
             "audio/video drift: {durations:?}"
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "requires local FFmpeg; uses generated test video, never screen capture"]
+    fn synthetic_stop_hands_final_segment_to_highlights_before_removing_buffer() {
+        let ffmpeg = find_ffmpeg().expect("local FFmpeg is required");
+        let root = env::temp_dir().join(format!("stillclip-highlight-stop-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dir = root.join("buffer"); fs::create_dir_all(&dir).unwrap();
+        let list_path = dir.join("segments.csv");
+        let mut child = command(&ffmpeg)
+            .args(["-hide_banner","-loglevel","error","-f","lavfi","-i","testsrc2=size=320x180:rate=30",
+                "-t","6.5","-an","-c:v","libx264","-preset","ultrafast","-g","30","-bf","0",
+                "-f","segment","-segment_time","5","-segment_list_type","csv","-segment_list"])
+            .arg(&list_path).arg(dir.join("seg-%06d.ts"))
+            .stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        assert!(child.wait().unwrap().success());
+        let original = scan_segments(&dir,&list_path);
+        assert_eq!(original.len(),2);
+        assert!(original[1].duration().unwrap() < 2.0);
+        let mut recorder = Recorder::new(ffmpeg.clone());
+        recorder.session = Some(Session {
+            window:None,child,started:Instant::now(),dir:dir.clone(),log_path:dir.join("capture.log"),list_path,
+            audio:Vec::new(),keep_full:false,replay_seconds:120,fps:30,clips_dir:root.clone(),info:SessionInfo::default(),
+            last_clip:None,precise:false,encoder:Encoder::Cpu,rates:crate::encoding::CaptureEncoding::for_output(320,180,30,320,180,0),min_free_bytes:0,ticks:0,
+        });
+        let (full,tail) = recorder.stop_with_highlights(true).unwrap();
+        assert!(full.is_none() && !recorder.is_recording() && !dir.exists());
+        let tail = tail.unwrap().unwrap();
+        assert_eq!(tail.segments.len(),2);
+        assert!(tail.segments.iter().all(|s| s.path.is_file()));
+        let output = root.join("final.mp4");
+        recorder.export_all(&tail.segments,&output).unwrap();
+        assert!((probe_media(&ffmpeg,&output).unwrap().duration-6.5).abs() < 0.3);
+        let private = tail.dir.clone(); drop(tail); assert!(!private.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

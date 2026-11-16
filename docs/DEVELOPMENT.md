@@ -47,6 +47,8 @@ Symbol im Infobereich.
 | `src/portrait.rs` | Validierter und verschiebbarer 9:16-Zuschnitt |
 | `src/audio_test.rs` | Temporäre Audio-Vorschau mit den gewählten Tonquellen |
 | `src/highlights.rs` | Mehrere Ausschnitte vereinheitlichen, verbinden und als Highlight exportieren |
+| `src/valorant.rs`, `src/killfeed.rs` | Lokale Bildauswertung, Ereignisbestätigung und Gruppierung; siehe [HIGHLIGHTS.md](HIGHLIGHTS.md) |
+| `src/auto_highlights.rs` | Automatische Verarbeitung fertiger Aufnahmesegmente, begrenztes Archiv und Clip-Speicherung |
 | `src/diagnostics.rs` | Begrenztes Lesen und Auswerten vollständiger FFmpeg-Fortschrittsmeldungen |
 | `src/games.rs` | Spieleliste, Fenster-/Prozess-Erkennung, Watcher-Thread |
 | `src/capture.rs` | Bildschirme (DXGI), Encoder-Erkennung, FFmpeg-Kommandozeile |
@@ -62,8 +64,9 @@ Symbol im Infobereich.
 ### Automatische Prüfungen und Downloads
 
 `.github/workflows/verify.yml` baut auf Windows, führt Unit-/Regressionstests
-und ausschließlich synthetische FFmpeg-Tests aus und stellt ein portables ZIP
-als Actions-Artefakt bereit. FFmpeg und WebView2 werden nicht mitgeliefert.
+und ausschließlich synthetische FFmpeg-/OCR-Tests aus. Es erstellt Online-/Offline-
+Installer sowie ein portables ZIP mit FFmpeg und OCR-Modellen. Installer richten
+WebView2 bei Bedarf ein; Portable setzt eine installierte WebView2-Laufzeit voraus.
 Echte Bildschirm-/Mikrofonprüfungen bleiben ausdrücklich manuelle Tests.
 
 Die Oberfläche wird separat mit simulierten Zustandsdaten geprüft:
@@ -104,9 +107,10 @@ Die Bilder müssen nach UI-Änderungen bewusst neu erzeugt und geprüft werden.
 
 Die Versionsnummer steht in `Cargo.toml` und im Stillclip-Eintrag von `Cargo.lock`.
 Für eine Veröffentlichung muss der zugehörige Commit auf `main` alle Prüfungen
-bestehen. Das daraus erstellte ZIP wird unverändert an den passenden Release
-angehängt. `SHA256SUMS.txt` enthält dessen Prüfsumme. FFmpeg und WebView2 bleiben
-externe Voraussetzungen und werden nicht in das Paket aufgenommen.
+bestehen. Der Workflow `publish-release.yml` übernimmt die verifizierten Artefakte
+aus genau diesem Lauf in einen vorbereiteten Release-Entwurf. `SHA256SUMS.txt`
+enthält die Prüfsummen. Komponentenmanifest, FFmpeg-Quellpaket, Installer und
+Portable-ZIP werden gemeinsam veröffentlicht; siehe [Installation](INSTALLATION.md).
 
 Der Workflow **Publish verified release** übernimmt diesen Schritt:
 

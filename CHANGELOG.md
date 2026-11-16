@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0 · 16 November 2026
+
+- Opt-in automatic VALORANT clips from the existing recording buffer. Repeatedly recognized kills are grouped into moments, saved locally with individual timeline markers, and tagged by game and kill count.
+- Select a minimum of one to five kills, pre-roll, post-roll and grouping interval. Stable score changes and round banners separate groups; no ace, clutch or headshot claim is inferred from a kill count.
+- One background worker with a bounded two-minute segment archive, backlog skipping, visible status and a pause button. Recording and stopping remain available; the final completed segment is preserved before buffer cleanup.
+- Fast MP4 saves retain every recorded audio track. Temporary files are cleaned on completion, failure or cancellation.
+- Visual killfeed calibration in a recorded frame, with percentage fields for keyboard input. Manual review now groups related kills, labels uncertain readings, and adds every event marker when accepted.
+- Shared local OCR reads the killfeed and round context in a single inference image. No game API, game-memory access, client log or cloud processing is required.
+- Extend unit, browser and synthetic video checks for grouping, stop hand-off, markers, audio tracks, settings migration and cancellation. Real VALORANT accuracy and gaming performance remain unverified; automatic detection is experimental and disabled by default.
+
 ## 0.8.0 · 16 November 2026
 
 - First-run setup in English and German, with an explicitly started ten-second video/audio test and a disposable preview. Existing profiles can reopen the assistant without being forced through it.

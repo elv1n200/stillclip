@@ -313,6 +313,29 @@ const fs = require('node:fs/promises');
     assert.equal(await page.evaluate(()=>window.messages.at(-1).action),'update_check');
     await page.evaluate(()=>window.setState({recording:true})); assert(await page.locator('#update-check').isDisabled());
     await page.evaluate(()=>window.setState({recording:false}));
+    // Automatic highlights are opt-in, require models/name and keep capture
+    // controls usable while settings and other heavy jobs are locked.
+    assert.equal(await page.locator('#auto-enabled').isChecked(),false);
+    await page.evaluate(({settings,desktop})=>window.setState({settings:{...settings,desktop:{...settings.desktop,player_name:''}},desktop:{...desktop,models_available:false}}),{settings:desktopSettings,desktop:desktopState});
+    assert(await page.locator('#auto-enabled').isDisabled());
+    await page.evaluate(({settings,desktop})=>window.setState({settings,desktop}),{settings:desktopSettings,desktop:desktopState});
+    await page.check('#auto-enabled');
+    const automaticPrefs=await page.evaluate(()=>window.messages.at(-1));
+    assert.equal(automaticPrefs.action,'desktop_preferences');
+    assert.deepEqual(automaticPrefs.preferences.highlights,{enabled:true,min_kills:2,before:12,after:6,merge_gap:8});
+    desktopPrefs.highlights=automaticPrefs.preferences.highlights;
+    await page.evaluate(settings=>window.setState({settings,recording:true,auto_highlights:{running:true,phase:'watching',detected:3,saved:1,skipped:0,lag_seconds:2}}),desktopSettings);
+    for(const id of ['auto-enabled','auto-player','auto-min-kills','killfeed-player','killfeed-width'])assert(await page.locator('#'+id).isDisabled(),`${id} must stay locked during detection`);
+    assert.match(await page.locator('#auto-status').textContent(),/3 detected kills.*1 saved highlights/);
+    await page.click('#auto-pause');assert.equal(await page.evaluate(()=>window.messages.at(-1).action),'auto_highlights_pause');
+    await page.evaluate(()=>window.setState({recording:false,auto_highlights:{running:true,phase:'finishing',detected:3,saved:1,skipped:1,lag_seconds:12}}));
+    assert(await page.locator('#update-check').isDisabled());
+    assert(await page.locator('#auto-player').isDisabled());
+    assert.match(await page.locator('#auto-status').textContent(),/Processing the final moments.*1 skipped ranges.*12s/);
+    await page.evaluate(()=>window.setState({auto_highlights:{running:false,phase:'error',saved:1,error:'<img src=x onerror=alert(1)>'}}));
+    assert.equal(await page.locator('#auto-error img').count(),0);
+    assert(await page.locator('#auto-pause').isHidden());
+    await page.evaluate(()=>window.setState({auto_highlights:{running:false,phase:'complete',saved:1,detected:3}}));
     await page.click('#report-open');
     await page.evaluate(desktop=>window.setState({desktop:{...desktop,report:{version:'0.8.0',status:'<script>private</script>'}}}),desktopState);
     assert.match(await page.inputValue('#report-content'),/<script>private<\/script>/); assert.equal(await page.locator('#report-content script').count(),0);
@@ -336,6 +359,20 @@ const fs = require('node:fs/promises');
     assert.equal(Number(await page.inputValue('#trim-start')),0);
     await page.locator('#killfeed-suggestions button').last().click();
     assert.equal(await page.evaluate(()=>window.messages.at(-1).action),'killfeed_accept');
+    await page.waitForFunction(()=>document.getElementById('editor-video').readyState>=2);
+    await page.click('#killfeed-calibrate');
+    assert(await page.locator('#region-backdrop').isVisible());
+    const area=await page.locator('#region-canvas').boundingBox();
+    await page.mouse.move(area.x+area.width*.57,area.y+area.height*.03);await page.mouse.down();
+    await page.mouse.move(area.x+area.width*.99,area.y+area.height*.32,{steps:4});await page.mouse.up();
+    await page.click('#region-apply');
+    const calibrated=await page.evaluate(()=>window.messages.at(-1));
+    assert.equal(calibrated.action,'desktop_preferences');
+    for(const [key,value] of Object.entries({left:.57,top:.03,width:.42,height:.29}))assert(Math.abs(calibrated.preferences.killfeed_region[key]-value)<.003,`calibration ${key}`);
+    assert(await page.locator('#region-backdrop').isHidden());
+    await page.click('#killfeed-calibrate');await page.keyboard.press('Escape');
+    assert(await page.locator('#region-backdrop').isHidden());
+    assert(await page.locator('#killfeed-calibrate').evaluate(el=>el===document.activeElement));
     for(const width of [1280,720]) {
       await page.setViewportSize({width,height:840});
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`desktop tools overflow at ${width}`);
@@ -345,7 +382,14 @@ const fs = require('node:fs/promises');
     await page.evaluate(settings=>window.setState({settings:{...settings,language:'de'}}),desktopSettings);
     assert.match(await page.locator('#setup-open').textContent(),/Einrichtungsassistent/);
     assert.match(await page.locator('#report-open').textContent(),/Diagnosebericht/);
+    assert.match(await page.locator('#auto-status').textContent(),/Aufnahme ausgewertet/);
+    for(const width of [1280,720]) {
+      await page.setViewportSize({width,height:840});
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`automatic settings overflow at ${width}`);
+      await page.locator('#auto-enabled').scrollIntoViewIfNeeded();
+      if(shotDir)await page.screenshot({path:path.join(shotDir,`automatic-settings-de-${width}.png`),animations:'disabled'});
+    }
     assert.deepEqual(errors, []);
-    console.log('UI checks passed: setup, update gating, reports, waveform/mix preview, killfeed review, German/English switching, persisted language, draft/user-content preservation, recording, profiles, favorites, tags/filters, queue progress/cancellation, audio test, native drag IPC, portrait crops/highlights, 1280/720px layout and video playback.');
+    console.log('UI checks passed: automatic highlight opt-in/locking/status/pause, visual killfeed calibration, setup, update gating, reports, waveform/mix preview, killfeed review, German/English switching, persisted language, draft/user-content preservation, recording, profiles, favorites, tags/filters, queue progress/cancellation, audio test, native drag IPC, portrait crops/highlights, 1280/720px layout and video playback.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

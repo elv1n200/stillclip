@@ -289,16 +289,56 @@ oder ein Highlight-Reel anschließend den neuen Clip auswählen. Wellenformen
 unterstützen Videos bis sechs Stunden; die vorübergehende PCM-Datei wird nach
 der Verarbeitung oder einem Abbruch entfernt.
 
+## Automatische VALORANT-Highlights
+
+Unter **Einstellungen → Desktop & Einrichtung → VALORANT · Automatische
+Highlights** den sichtbaren Namen ohne Riot-#Tag eintragen und **Bestätigte
+Highlights automatisch speichern** aktivieren. Die Funktion ist zunächst aus
+und experimentell. Lateinische ASCII-Namen mit mindestens drei Buchstaben/Ziffern
+werden unterstützt. Für den vollständigen Ablauf unter **Spiele** auch die
+automatische Aufnahme aktivieren und anschließend VALORANT starten. Die Erkennung
+beginnt mit einer neuen, als VALORANT erkannten Aufnahme; bei manueller Aufnahme
+VALORANT als Ziel wählen oder erst nach der Spielerkennung starten.
+
+Standardmäßig werden mindestens zwei erkannte Kills zu einem Clip zusammengefasst.
+Die Mindestzahl ist zwischen eins und fünf einstellbar. Unter **Clip-Zeitfenster**
+stehen Vorlauf, Nachlauf und maximaler Abstand zwischen verbundenen Kills:
+standardmäßig 12, 6 und 8 Sekunden. Wiederholt erkannte Rundenwechsel trennen
+Gruppen. `VALORANT 3K …` bezeichnet drei erkannte Ereignisse, keine garantierte
+Spielauszeichnung wie Ace oder Clutch.
+
+Gespeicherte MP4s erscheinen mit allen aufgenommenen Tonspuren, einzelnen
+Kill-Markierungen und den Tags `auto-highlight` sowie `2k`/`3k` in der Bibliothek.
+Anschließend lassen sie sich bearbeiten und für Discord exportieren. Die
+automatische Speicherung lädt nichts hoch und verwendet kein Discord-Dateilimit.
+
+Bibliothek und Einstellungen zeigen Status, gespeicherte Clips und übersprungene
+Bereiche. **Erkennung für diese Aufnahme pausieren** lässt die Aufnahme weiterlaufen;
+bei der nächsten VALORANT-Aufnahme startet die Erkennung erneut. Beim normalen
+Stoppen werden letzte Szenen fertig verarbeitet. Eine neue Aufnahme oder die
+Pausenfunktion bricht noch offene Erkennung ab. Name, Bereich und Erkennungsoptionen
+erst nach dem Ende von Aufnahme und Verarbeitung ändern.
+
+Die Erkennung verarbeitet fertige Videosegmente mit zusätzlicher CPU-Last und
+entsprechender Verzögerung. Der Puffer hält bei aktivierter Funktion mindestens
+zwei Minuten bereit. Bei etwa 40 Sekunden Rückstand werden ältere Bereiche
+übersprungen und im Status gezählt. Die Tests verwenden synthetisches Material;
+Trefferquote und Spielleistung müssen noch mit echten Matches geprüft werden.
+[Technik und Grenzen (Englisch)](HIGHLIGHTS.md).
+
 ## VALORANT-Vorschläge ausprobieren
 
 Die lokale Killfeed-Erkennung ist experimentell. Im Clip einen Bereich von
 höchstens 30 Minuten wählen, **VALORANT · Highlight-Vorschläge** öffnen und den
 sichtbaren Namen ohne Riot-#Tag eintragen. Derzeit werden lateinische
 ASCII-Zeichen und mindestens drei Zeichen unterstützt. Den Killfeed-Ausschnitt
-bei abweichenden Bildschirmformaten über Prozentwerte anpassen.
+bei abweichenden Bildschirmformaten über Prozentwerte anpassen oder mit
+**Killfeed im Bild markieren** einen Rahmen im Videobild ziehen.
 
 Nach **Bereich analysieren** lassen sich Vorschläge ansehen und einzeln als
-Markierung übernehmen. Es wird nichts automatisch exportiert. Die Analyse
+Markierung übernehmen; Gruppen übernehmen eine Markierung je erkanntem Kill.
+Unsichere Namen werden zum Prüfen gekennzeichnet. Bei dieser manuellen Analyse
+wird nichts automatisch exportiert. Die Analyse
 verwendet mitgelieferte OCR-Modelle auf dem eigenen Gerät, ohne Spielzugriff oder
 Upload. Sie kann Szenen übersehen oder falsch zuordnen. Automatische Tests
 verwenden synthetische Bilder; eine Trefferquote für echte Matches ist noch

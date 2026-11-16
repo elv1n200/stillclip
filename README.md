@@ -41,14 +41,20 @@ markers, isolated game/microphone tracks, a configurable recording HUD,
 recording diagnostics, and optional storage limits.
 **Desktop workflow:** A first-run assistant with an optional ten-second test recording,
 a waveform editor with mix previews, in-app update checks, and a diagnostic report
-that you can review before sharing. Experimental local VALORANT killfeed analysis
-suggests moments for manual review; the OCR models are included in every download.
+that you can review before sharing.
+
+**Automatic VALORANT highlights · experimental:** Enter your visible player name
+once and enable detection. Stillclip groups repeatedly recognized kills, saves
+MP4 clips with individual markers, and keeps your recorded audio tracks.
+Choose single kills or multikills, adjust the clip timing, and pause detection
+independently of recording. The OCR models are included in every download;
+processing stays on your PC. [Set it up →](docs/USAGE.en.md#automatic-valorant-highlights-experimental)
 
 [All features and settings →](docs/USAGE.en.md)
 
 ## From gameplay to a finished clip
 
-**01 · Save** — Start your game, keep recording, and press <kbd>F8</kbd> to save a replay.
+**01 · Save** — Start your game and press <kbd>F8</kbd> to save a replay, or enable automatic VALORANT highlights.
 
 **02 · Trim** — Choose the start and end. For portrait video, move the crop frame in the preview.
 
@@ -95,7 +101,7 @@ Use **Settings → Desktop & setup → Updates** to check release notes and down
 ## Good to know
 
 - Recording controls remain available during exports. Actual game performance depends on your PC, encoder, and settings.
-- Highlight suggestions are experimental, currently support ASCII player names, and can miss or misread scenes. No accuracy claim is made for real matches. Review suggestions before keeping them.
+- VALORANT detection is experimental, supports ASCII player names, and can miss or misread scenes. Automatic saving is off by default and uses additional CPU. Real-match accuracy and gaming performance still need validation. [Detection and testing details](docs/HIGHLIGHTS.md).
 - Automated tests cover application logic, the interface, and synthetic media. Real recording, audio devices, and dropping files into Discord also need [hands-on Windows testing (German checklist)](WINDOWS-CHECKS.md).
 - Favorites are protected from automatic cleanup. You can still delete them manually; automatic deletion is disabled by default.
 - Discord limits may change. The current presets and their source are documented in the [Discord export guide (German)](docs/USAGE.md#für-discord-speichern).

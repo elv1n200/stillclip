@@ -19,6 +19,7 @@ pub struct Preferences {
     pub automatic_updates: bool,
     pub player_name: String,
     pub killfeed_region: killfeed::Region,
+    pub highlights: crate::valorant::Preferences,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -30,6 +31,7 @@ impl Default for Preferences {
             automatic_updates: false,
             player_name: String::new(),
             killfeed_region: killfeed::Region::default(),
+            highlights: crate::valorant::Preferences::default(),
         }
     }
 }
@@ -41,8 +43,9 @@ impl Preferences {
             return Err(text("Ungültige HUD-Position.", "Invalid HUD position.").into());
         }
         self.hud_scale = self.hud_scale.clamp(60, 160);
+        self.highlights = self.highlights.sanitized();
         self.player_name = self.player_name.trim().to_owned();
-        if !self.player_name.is_empty() {
+        if self.highlights.enabled || !self.player_name.is_empty() {
             killfeed::validate_name(&self.player_name)?;
         }
         if !self.killfeed_region.valid() {
@@ -106,7 +109,8 @@ impl Desktop {
 
 impl App {
     pub(super) fn desktop_idle(&self) -> bool {
-        !self.recording
+        !self.auto_highlights.running()
+            && !self.recording
             && !self.busy
             && !self.capture.transitioning
             && !self.capture.wants_start()
@@ -236,6 +240,7 @@ impl App {
                 | "audio_mix_preview"
                 | "killfeed_analyze"
                 | "killfeed_accept"
+                | "auto_highlights_pause"
                 | "update_check"
                 | "update_download"
                 | "update_install"
@@ -244,6 +249,7 @@ impl App {
         ) {
             return false;
         }
+        if action == "auto_highlights_pause" { self.auto_highlights.cancel(); return true; }
         if self.closing {
             return true;
         }
@@ -265,6 +271,12 @@ impl App {
                     prefs.welcome_complete = self.settings.desktop.welcome_complete;
                     let mut settings = self.settings.clone();
                     settings.desktop = prefs.validate()?;
+                    let old = &self.settings.desktop;
+                    let next = &settings.desktop;
+                    if (self.recording || self.capture.transitioning || self.capture.wants_start() || self.auto_highlights.running())
+                        && (old.highlights != next.highlights || old.player_name != next.player_name || old.killfeed_region != next.killfeed_region) {
+                        return Err(text("Beende zuerst die Aufnahme und die Highlight-Erkennung.", "Finish recording and highlight detection first.").into());
+                    }
                     settings::save_settings(&self.config, &settings)?;
                     self.settings = settings;
                     self.message(Ok(
@@ -301,17 +313,13 @@ impl App {
                     if command["id"].as_u64() != Some(*id) {
                         return Err("Suggestion belongs to another clip.".into());
                     }
-                    let at = review
-                        .suggestions
-                        .get(index)
-                        .ok_or("Unknown suggestion.")?
-                        .at;
+                    let suggestion = review.suggestions.get(index).ok_or("Unknown suggestion.")?;
+                    let events = suggestion.events.clone();
                     let path = self.clip_path(command)?;
                     let mut markers = self.markers_of(&path);
-                    if !markers.iter().any(|m| (*m - at).abs() < 0.1) {
-                        markers.push(at);
-                        self.remember_markers(&path, markers);
-                    }
+                    for at in events { if !markers.iter().any(|m| (*m-at).abs() < 0.1) { markers.push(at); } }
+                    markers.sort_by(f64::total_cmp);
+                    self.remember_markers(&path,markers);
                     if !self.desktop.accepted.contains(&index) {
                         self.desktop.accepted.push(index);
                     }

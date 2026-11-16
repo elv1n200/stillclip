@@ -65,3 +65,12 @@ Sie ersetzen keine Aufnahme mit realen Geräten oder das Ablegen in Discord.
 - Echte VALORANT-Aufnahmen: Namensvarianten, eigene Kills/Tode, andere Spieler, mehrfache Kills, Killfeed-Verschiebung, Auflösungen und Seitenverhältnisse prüfen. Fehlalarme und übersehene Ereignisse dokumentieren. Synthetische OCR-Tests ersetzen diese Prüfung nicht.
 - Updates ohne Netz, bei laufender Aufnahme/Export, mit manipulierten Downloads und nach heruntergeladener Dateiänderung prüfen. Signierte Updates nur mit tatsächlich vorhandener, vertrauenswürdiger Herausgeberidentität testen.
 - Diagnosevorschau auf persönliche Pfade, Kontonamen und Fehlermeldungen prüfen; Bericht lokal speichern und Originalaufnahmen unverändert lassen.
+
+## Automatische VALORANT-Highlights ab 0.9
+
+- Erkennung aktivieren, Namen ohne #Tag eingeben und eine neue VALORANT-Aufnahme starten. Mindestzahl 1, 2 und 3, Vor-/Nachlauf sowie Pausenfunktion prüfen. Ohne Aktivierung entstehen keine automatischen Clips.
+- Kurzes echtes Match mit sichtbarem Killfeed aufnehmen. Eigene Kills, eigene Tode, fremde Kills, ähnliche Namen und Killfeed-Verschiebungen einzeln mit Zeitstempeln notieren. Vorschläge und automatische Clips dagegen prüfen: korrekte Treffer, Fehlalarme, verpasste Kills und doppelte Ereignisse getrennt zählen.
+- Rundenwechsel, Kaufphase, schneller Multi-Kill, langer Abstand, Tod/Wiederbelebung, Spielende und Neustart testen. `5K` darf keine unbelegte Ace-Bezeichnung erhalten. Bei verschiedenen Auflösungen, UI-Sprachen und Skalierungen den Bereich im Videobild kalibrieren.
+- Direkt nach einem Kill Aufnahme beenden und auf die Verarbeitung warten. Der letzte kurze Abschnitt muss im Clip enthalten sein; jede Markierung muss im Video liegen. Bei getrennter Aufnahme Mix, Spielton und Mikrofon im Audioeditor prüfen.
+- Erkennung pausieren, während sie verarbeitet oder speichert. Aufnahme/Stoppen müssen bedienbar bleiben, fertige Clips erhalten und temporäre Dateien entfernt werden. Neue Aufnahme während der Nachverarbeitung starten und Beenden aus dem Infobereich testen.
+- Je fünf Minuten mit und ohne Erkennung auf demselben PC spielen. CPU, FPS, ausgelassene Frames, Verzögerung und übersprungene Analysebereiche vergleichen. Unter Last darf kein unbegrenzter Rückstau entstehen. Die synthetischen CI-Tests ersetzen diese Messungen nicht.
