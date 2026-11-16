@@ -30,7 +30,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist/stillclip -Force
-          Copy-Item target/release/stillclip.exe, README.md, CREDITS.md dist/stillclip
+          Copy-Item target/release/stillclip.exe, README.md, CREDITS.md, WINDOWS-CHECKS.md dist/stillclip
           Compress-Archive -Path dist/stillclip/* -DestinationPath dist/stillclip-windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
