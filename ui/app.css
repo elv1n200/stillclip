@@ -472,7 +472,9 @@ select:focus { border-color: #969696; }
 .clip-tags { color: #d9a0b8; font-size: 11px; overflow-wrap: anywhere; margin-top: 7px; }
 .audio-level { display: grid; grid-template-columns: 85px minmax(60px, 1fr) 90px; align-items: center; gap: 10px; margin: 8px 0; font-size: 12px; }
 .audio-level meter { width: 100%; height: 18px; }
-.audio-test audio { width: 100%; margin-top: 10px; }
+.audio-test audio { width: 100%; margin-top: 10px; color-scheme: dark; }
+.audio-test audio::-webkit-media-controls-enclosure { border-radius: 0; }
+.audio-test audio::-webkit-media-controls-panel { background: #181818; }
 .audio-test .is-error { color: #ffaaaa; }
 [hidden] { display: none !important; }
 @media (max-width: 760px) { .filter-fields label { flex: 1 1 140px; } .filter-fields input, .filter-fields select { max-width: 100%; width: 100%; } .annotation-panel label { flex-basis: 100%; } }
