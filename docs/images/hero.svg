@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="440" viewBox="0 0 1280 440" role="img" aria-labelledby="title description">
-  <title id="title">stillclip. — Dein Gameplay. Dein Moment.</title>
-  <desc id="description">Schwarzes Terminal-Banner mit eckigen Rahmen, rosa Wortmarke und einer grafischen Clip-Zeitleiste. Lokale Spielclips für Windows.</desc>
+  <title id="title">stillclip. — Your gameplay. Your moment.</title>
+  <desc id="description">Black terminal banner with square borders, a pink wordmark, and a clip timeline graphic. Local gameplay clips for Windows.</desc>
   <defs>
     <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#252025" stroke-width=".6"/></pattern>
     <linearGradient id="fade"><stop stop-color="#0b0b0c"/><stop offset="1" stop-color="#171016"/></linearGradient>
@@ -13,21 +13,21 @@
   <path d="M16 62h1248M16 384h1248" stroke="#383239"/>
   <g font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="12" letter-spacing="1.5">
     <text x="42" y="45" fill="#d6cfd4">STILLCLIP / WINDOWS GAME CAPTURE</text>
-    <text x="1237" y="45" text-anchor="end" fill="#e4a0b7">[ LOKAL ]</text>
+    <text x="1237" y="45" text-anchor="end" fill="#e4a0b7">[ LOCAL ]</text>
   </g>
   <path d="M62 104h24v24H62z" fill="none" stroke="#e4a0b7"/>
   <path d="M68 110h12v12H68z" fill="#e4a0b7"/>
-  <text x="104" y="122" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="12" letter-spacing="3" fill="#aaa1a8">AUFNEHMEN. MARKIEREN. BEHALTEN.</text>
+  <text x="104" y="122" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="12" letter-spacing="3" fill="#aaa1a8">RECORD. MARK. KEEP.</text>
   <text x="58" y="224" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="100" font-weight="700" letter-spacing="-7" fill="#f1ecef">stillclip<tspan fill="#e4a0b7">.</tspan></text>
-  <text x="62" y="280" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="27" fill="#f1ecef">Dein Gameplay.</text>
-  <text x="62" y="319" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="27" fill="#e4a0b7">Dein Moment.</text>
+  <text x="62" y="280" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="27" fill="#f1ecef">Your gameplay.</text>
+  <text x="62" y="319" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="27" fill="#e4a0b7">Your moment.</text>
   <g transform="translate(768 96)">
     <path d="M32 0h416v222H32z" fill="#100f11" stroke="#41333d"/>
     <path d="M16 14h416v222H16z" fill="#121013" stroke="#75616e"/>
     <path d="M0 28h416v222H0z" fill="#0b0b0c" stroke="#e4a0b7"/>
     <path d="M0 62h416" stroke="#49343f"/>
     <rect x="16" y="41" width="8" height="8" fill="#e4a0b7"/>
-    <text x="36" y="50" fill="#e4a0b7" font-family="monospace" font-size="11" letter-spacing="2">MOMENT GESICHERT</text>
+    <text x="36" y="50" fill="#e4a0b7" font-family="monospace" font-size="11" letter-spacing="2">MOMENT SAVED</text>
     <text x="398" y="50" text-anchor="end" fill="#aaa1a8" font-family="monospace" font-size="11">00:30</text>
     <path d="M16 78h384v104H16z" fill="url(#clip)"/>
     <g fill="none" stroke="#bc829e" stroke-width="1.5">
@@ -43,7 +43,7 @@
     <path d="M154 198v30m166-30v30" stroke="#e4a0b7" stroke-width="3"/>
   </g>
   <g fill="#a69ba3" font-family="'DejaVu Sans Mono',Consolas,monospace" font-size="11" letter-spacing="1.5">
-    <text x="42" y="410">REPLAY-PUFFER / CLIP-EDITOR / DISCORD-EXPORT</text>
-    <text x="1237" y="410" text-anchor="end" fill="#e4a0b7">DEINE DATEIEN. DEINE KONTROLLE.</text>
+    <text x="42" y="410">REPLAY BUFFER / CLIP EDITOR / DISCORD EXPORT</text>
+    <text x="1237" y="410" text-anchor="end" fill="#e4a0b7">YOUR FILES. YOUR CONTROL.</text>
   </g>
 </svg>

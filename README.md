@@ -1,91 +1,91 @@
 <div align="center">
 
-<img src="docs/images/hero.svg" alt="Stillclip — Dein Gameplay. Dein Moment. Lokale Spielclips für Windows." width="100%">
+<img src="docs/images/hero.svg" alt="Stillclip — Your gameplay. Your moment. Local gameplay clips for Windows." width="100%">
 
-**Der Moment ist vorbei. Dein Clip bleibt.**
+**The moment passes. Your clip stays.**
 
-Stillclip hält dein Gameplay im Rückblick bereit. Ein Tastendruck sichert den Moment —
-danach schneidest du ihn zu, sammelst Highlights und exportierst ihn für Discord oder im Hochformat.
+Stillclip keeps a rolling buffer of your gameplay. Press a key to save the moment,
+then trim it, build a highlight reel, and export it for Discord or in portrait format.
 
-[![Windows-Version herunterladen](docs/images/download.svg)](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-windows-x64.zip)
+[![Download for Windows](docs/images/download.svg)](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-windows-x64.zip)
 
-[![Build und Tests](https://img.shields.io/badge/CI-Build_%26_Tests-e4a0b7?style=flat-square&labelColor=303030)](https://github.com/elv1n200/stillclip/actions/workflows/verify.yml) ![Windows x64](https://img.shields.io/badge/Windows-x64-171717?style=flat-square&labelColor=303030&color=e4a0b7) ![Rust + FFmpeg](https://img.shields.io/badge/Rust-FFmpeg-171717?style=flat-square&labelColor=303030&color=e4a0b7)
+[![Build and tests](https://img.shields.io/badge/CI-Build_%26_Tests-e4a0b7?style=flat-square&labelColor=303030)](https://github.com/elv1n200/stillclip/actions/workflows/verify.yml) ![Windows x64](https://img.shields.io/badge/Windows-x64-171717?style=flat-square&labelColor=303030&color=e4a0b7) ![Rust + FFmpeg](https://img.shields.io/badge/Rust-FFmpeg-171717?style=flat-square&labelColor=303030&color=e4a0b7)
 
-[Schnellstart](#schnellstart) · [Funktionen](#was-stillclip-kann) · [Anleitung](docs/USAGE.md) · [Versionshinweise](CHANGELOG.md)
+[Quick start](#quick-start) · [Features](#features) · [User guide (German)](docs/USAGE.md) · [Changelog (German)](CHANGELOG.md)
 
 </div>
 
 ---
 
-## Deine Clips. Dein Rechner.
+## Your clips. Your PC.
 
-Kein Konto, kein Cloud-Zwang, keine Werbung. Videos bleiben auf deinem Rechner.
-Du entscheidest, was du behältst und was du teilst.
+No account, no required cloud service, no ads. Your videos stay on your PC.
+You decide what to keep and what to share.
 
-![Stillclip-Bibliothek mit Favoriten, Tags und sechs Demo-Clips](docs/images/library.png)
+![Stillclip library with favorites, tags, and six demo clips](docs/images/library.png)
 
-<sub>Aktuelle Oberfläche mit synthetischen Demo-Clips. Die Vorschauen zeigen keine echten Spielaufnahmen.</sub>
+<sub>The app interface is currently in German. These previews use synthetic demo clips, not actual gameplay recordings.</sub>
 
-## Was Stillclip kann
+## Features
 
-| Festhalten | Bearbeiten | Teilen |
+| Record | Edit | Share |
 | :--- | :--- | :--- |
-| **Rückblick mit F8.** Sichere die letzten Sekunden, auch wenn der Moment schon vorbei ist. | **Schnitt & Highlights.** Wähle Ausschnitte, sortiere sie und verbinde mehrere Clips. | **Discord-Profile.** Geprüfte MP4-Dateien für 20 MB ohne Nitro oder 1 GB mit Nitro. |
-| **Spieleprofile.** Eigene Auflösung, FPS, Cliplänge und Tonquelle für jedes Spiel. | **Verschiebbarer 9:16-Zuschnitt.** Bestimme den Bildausschnitt für Shorts, Reels und TikTok. | **Exportliste.** Fortschritt, geschätzte Restzeit und Abbrechen, während du weiter bearbeitest. |
-| **Spielton & Mikrofon.** Wähle deine Quellen und prüfe den Mix mit dem Audio-Test. | **Favoriten & Tags.** Finde Clips nach Spiel, Tag, Datum oder Länge. | **Dateien direkt ziehen.** Übergib einen Clip an Discord oder den Explorer. |
+| **Instant replay with F8.** Save the last few seconds, even after the moment has passed. | **Trimming & highlights.** Select, reorder, and combine excerpts from multiple clips. | **Discord presets.** Export MP4 files checked against the 20 MB free or 1 GB Nitro limit. |
+| **Game profiles.** Set resolution, FPS, clip length, and audio sources for each game. | **Adjustable 9:16 crop.** Choose what stays in frame for Shorts, Reels, and TikTok. | **Export queue.** Track progress, see estimated time remaining, and cancel jobs while you keep editing. |
+| **Game audio & microphone.** Choose your sources and check the mix with the audio test. | **Favorites & tags.** Find clips by game, tag, date, or duration. | **Drag files out.** Drop a clip into Discord or File Explorer. |
 
-**Außerdem:** Fenster- oder Bildschirmaufnahme, NVENC/AMF/Quick Sync,
-Markierungen, getrennte Mikrofonspur, Aufnahmediagnose und optionale Speichergrenzen.
-[Alle Funktionen und Einstellungen →](docs/USAGE.md)
+**Also included:** Window or screen capture, NVENC/AMF/Quick Sync,
+markers, a separate microphone track, recording diagnostics, and optional storage limits.
+[All features and settings (German) →](docs/USAGE.md)
 
-## Vom Moment zum fertigen Clip
+## From gameplay to a finished clip
 
-**01 · Sichern** — Spiel starten, Aufnahme laufen lassen, mit <kbd>F8</kbd> den Rückblick speichern.
+**01 · Save** — Start your game, keep recording, and press <kbd>F8</kbd> to save a replay.
 
-**02 · Zuschneiden** — Start und Ende wählen. Für Hochkant den Rahmen im Vorschaubild verschieben.
+**02 · Trim** — Choose the start and end. For portrait video, move the crop frame in the preview.
 
-**03 · Exportieren** — Profil wählen und einreihen. Die Originaldatei bleibt erhalten.
+**03 · Export** — Pick a preset and add it to the queue. Your original file stays intact.
 
-![Stillclip-Editor mit verschiebbarem Hochkant-Rahmen und markierten Momenten](docs/images/editor.png)
+![Stillclip editor with an adjustable portrait crop and timeline markers](docs/images/editor.png)
 
 <details>
-<summary><strong>Exportliste und Highlight-Editor ansehen</strong></summary>
+<summary><strong>See the export queue and highlight editor</strong></summary>
 
-![Highlight-Auswahl und Exportliste mit Fortschritt und Abbrechen](docs/images/exports.png)
+![Highlight selection and export queue with progress and cancellation controls](docs/images/exports.png)
 
-Die Liste verarbeitet bis zu zwölf Aufträge nacheinander. Quellclips bleiben während
-laufender Exporte geschützt. Beim Beenden werden offene Aufträge abgebrochen;
-beim Minimieren in den Infobereich laufen sie weiter.
+The queue processes up to twelve jobs, one at a time. Source clips stay protected
+during exports. Quitting the app cancels unfinished jobs;
+minimizing to the system tray lets them continue.
 
 </details>
 
-## Schnellstart
+## Quick start
 
-1. **[Windows-ZIP herunterladen](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-windows-x64.zip)** und vollständig in einen beschreibbaren Ordner entpacken.
-2. **Voraussetzungen bereitstellen:** [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) und einen [FFmpeg-Build für Windows](https://ffmpeg.org/download.html#build-windows). `ffprobe.exe` am besten neben `ffmpeg.exe` ablegen.
-3. **`stillclip.exe` starten.** Falls FFmpeg nicht erkannt wird, unter **Einstellungen → FFmpeg** auswählen. Bildschirm, Ton und optional ein Spielprofil einstellen.
-4. **Aufnahme starten und <kbd>F8</kbd> drücken.** Der gesicherte Moment erscheint in deiner Bibliothek.
+1. **[Download the Windows ZIP](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-windows-x64.zip)** and extract it completely into a writable folder.
+2. **Install the prerequisites:** [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) and a [Windows build of FFmpeg](https://ffmpeg.org/download.html#build-windows). Keep `ffprobe.exe` next to `ffmpeg.exe` if possible.
+3. **Launch `stillclip.exe`.** If FFmpeg is not detected, select it under **Settings (Einstellungen) → FFmpeg**. Choose your display, audio sources, and an optional game profile.
+4. **Click Start recording (Aufnahme starten), then press <kbd>F8</kbd>.** Your saved moment appears in the library.
 
-| Voraussetzung | Hinweis |
+| Requirement | Details |
 | :--- | :--- |
-| Windows x64 | Windows 11 empfohlen. Bildschirmaufnahme und Systemton sind auch unter Windows 10 vorgesehen. |
-| Nur Spielton | Windows Build 20348 oder neuer, zum Beispiel Windows 11. |
-| Nur Spielfenster | FFmpeg mit `gfxcapture` und der Option `hwnd`; die App prüft die Unterstützung. |
-| Speicherort | Standardmäßig `clips/` und `settings/` neben der EXE, kein Installationsprogramm nötig. |
+| Windows x64 | Windows 11 recommended. Screen capture and system audio are also designed to work on Windows 10. |
+| Game audio only | Windows build 20348 or later, such as Windows 11. |
+| Game window only | FFmpeg with `gfxcapture` and its `hwnd` option; the app checks for support. |
+| Storage | By default, `clips/` and `settings/` live next to the EXE. No installer needed. |
 
-**Das ZIP enthält Stillclip und die Dokumentation. FFmpeg und WebView2 werden separat bereitgestellt.**
-Für ein Update den bisherigen Clip- und Einstellungsordner behalten und die App vorher beenden.
+**The ZIP includes Stillclip and its documentation. FFmpeg and WebView2 are separate prerequisites.**
+Quit Stillclip before updating, and keep your existing `clips/` and `settings/` folders.
 
-## Gut zu wissen
+## Good to know
 
-- Die Aufnahme bleibt beim Export bedienbar. Die tatsächliche Spielleistung hängt von PC, Encoder und Einstellungen ab.
-- Automatische Tests prüfen Logik, Oberfläche und synthetische Medien. Reale Aufnahme, Audiogeräte und Discord-Drops benötigen zusätzlich einen [Praxistest unter Windows](WINDOWS-CHECKS.md).
-- Favoriten sind vor automatischem Aufräumen geschützt. Manuelles Löschen bleibt möglich; die automatische Löschfunktion ist standardmäßig ausgeschaltet.
-- Discord-Limits können sich ändern. Die aktuellen Profile und ihre Grundlage stehen in der [Export-Anleitung](docs/USAGE.md#für-discord-speichern).
+- Recording controls remain available during exports. Actual game performance depends on your PC, encoder, and settings.
+- Automated tests cover application logic, the interface, and synthetic media. Real recording, audio devices, and dropping files into Discord also need [hands-on Windows testing (German checklist)](WINDOWS-CHECKS.md).
+- Favorites are protected from automatic cleanup. You can still delete them manually; automatic deletion is disabled by default.
+- Discord limits may change. The current presets and their source are documented in the [Discord export guide (German)](docs/USAGE.md#für-discord-speichern).
 
-## Selbst bauen
+## Build from source
 
-Unter Windows mit Rust und den Microsoft C++ Build Tools:
+On Windows, with Rust and the Microsoft C++ Build Tools installed:
 
 ```powershell
 git clone https://github.com/elv1n200/stillclip.git
@@ -93,12 +93,12 @@ cd stillclip
 cargo build --locked --release
 ```
 
-Die EXE liegt anschließend unter `target/release/stillclip.exe`.
+The executable is written to `target/release/stillclip.exe`.
 
-[Entwicklung & Tests](docs/DEVELOPMENT.md) · [Beitragen](CONTRIBUTING.md) · [Fehler melden](https://github.com/elv1n200/stillclip/issues/new/choose) · [Abhängigkeiten & Credits](CREDITS.md)
+[Development & tests (German)](docs/DEVELOPMENT.md) · [Contributing (German)](CONTRIBUTING.md) · [Report an issue (German forms)](https://github.com/elv1n200/stillclip/issues/new/choose) · [Dependencies & credits](CREDITS.md)
 
 ---
 
 <div align="center">
-<sub>stillclip. · Aufnehmen. Markieren. Behalten.</sub>
+<sub>stillclip. · Record. Mark. Keep.</sub>
 </div>

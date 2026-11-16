@@ -32,4 +32,4 @@
 - Vorlagen für Fehlerberichte, Funktionsvorschläge und Pull Requests.
 
 Praktische Hinweise zur Windows-/FFmpeg-Unterstützung stehen im
-[Schnellstart](README.md#schnellstart) und in der [Windows-Prüfung](WINDOWS-CHECKS.md).
+[Schnellstart](README.md#quick-start) und in der [Windows-Prüfung](WINDOWS-CHECKS.md).
