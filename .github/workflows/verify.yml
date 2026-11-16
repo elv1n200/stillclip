@@ -28,7 +28,7 @@ jobs:
         run: |
           New-Item -ItemType Directory native-artifacts | Out-Null
           Copy-Item target/release/stillclip.exe native-artifacts/
-          $tests = Get-ChildItem target/debug/deps/stillclip-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $tests = Get-ChildItem target/debug -Filter 'stillclip-*.exe' -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (!$tests) { throw 'Native test executable is missing' }
           Copy-Item $tests.FullName native-artifacts/stillclip-tests.exe
           $icon = Get-ChildItem target/release/build -Filter stillclip.ico -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
