@@ -4,6 +4,7 @@
 
 mod audio;
 mod capture;
+mod discord;
 mod encoding;
 mod export;
 mod games;
@@ -1208,6 +1209,8 @@ impl App {
                 (Ok(path), Some(ffmpeg)) => {
                     let start = command["start"].as_f64().unwrap_or(f64::NAN);
                     let end = command["end"].as_f64().unwrap_or(f64::NAN);
+                    let discord_profile =
+                        discord::Profile::from_id(command["mode"].as_str().unwrap_or("precise"));
                     let mode = if command["mode"].as_str() == Some("fast") {
                         TrimMode::Fast
                     } else {
@@ -1222,20 +1225,31 @@ impl App {
                     // Marked moments of the source; the ones inside the cut move along.
                     let marks = self.markers_of(&path);
                     let events = proxy.clone();
-                    self.file_job(proxy, "Dein Clip wird geschnitten…", move || {
+                    let notice = if discord_profile.is_some() {
+                        "Dein Discord-Clip wird komprimiert und geprüft…"
+                    } else {
+                        "Dein Clip wird geschnitten…"
+                    };
+                    self.file_job(proxy, notice, move || {
                         let duration = recorder::probe_duration(&ffmpeg, &path)?;
                         let Some((start, end)) = mechanics::editor_range(start, end, duration) else {
                             return Err("Der Ausschnitt muss mindestens zwei Sekunden lang sein und innerhalb des Videos liegen. Kürzere Videos können vollständig gespeichert werden.".into());
                         };
-                        let output = unique_trim_path(&dir, &stem);
-                        recorder::trim_clip(&ffmpeg, &path, &output, start, end, mode).map(|from| {
-                            send_markers(&events, &output, &marks, from, end - from);
-                            JobOutcome {
-                                message: "Schnitt als neuer Clip gespeichert. Das Original bleibt erhalten.".into(),
-                                saved: Some(output),
-                                session: None,
-                                replay: false,
-                            }
+                        let suffix = discord_profile.map_or("Schnitt", |profile| profile.suffix());
+                        let output = unique_trim_path(&dir, &stem, suffix);
+                        let (from, message) = if let Some(profile) = discord_profile {
+                            let bytes = discord::export_clip(&ffmpeg, &path, &output, start, end, profile)?;
+                            (start, format!("{}: {:.2} MB gespeichert und Dateilimit geprüft. Das Original bleibt erhalten.", profile.label(), bytes as f64 / 1_000_000.0))
+                        } else {
+                            let from = recorder::trim_clip(&ffmpeg, &path, &output, start, end, mode)?;
+                            (from, "Schnitt als neuer Clip gespeichert. Das Original bleibt erhalten.".into())
+                        };
+                        send_markers(&events, &output, &marks, from, end - from);
+                        Ok(JobOutcome {
+                            message,
+                            saved: Some(output),
+                            session: None,
+                            replay: false,
                         })
                     });
                 }
@@ -1440,11 +1454,11 @@ fn marker_state(at: f64, before: f64, after: f64, buffered: Option<(f64, f64)>) 
     (ready, available)
 }
 
-fn unique_trim_path(dir: &Path, stem: &str) -> PathBuf {
-    let mut candidate = dir.join(format!("{stem} - Schnitt.mp4"));
+fn unique_trim_path(dir: &Path, stem: &str, suffix: &str) -> PathBuf {
+    let mut candidate = dir.join(format!("{stem} - {suffix}.mp4"));
     let mut number = 2;
     while candidate.exists() {
-        candidate = dir.join(format!("{stem} - Schnitt {number}.mp4"));
+        candidate = dir.join(format!("{stem} - {suffix} {number}.mp4"));
         number += 1;
     }
     candidate

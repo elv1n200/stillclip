@@ -99,8 +99,28 @@ const fs = require('node:fs/promises');
     await page.waitForFunction(() => Math.abs(document.getElementById('editor-video').currentTime - 1) < 0.1);
     await page.click('#trim-clip');
     assert.equal(await page.evaluate(() => window.messages.at(-1).action), 'trim');
+    for (const [mode, limit] of [['discord_free', '20 MB'], ['discord_nitro', '1 GB']]) {
+      await page.selectOption('#trim-mode', mode);
+      assert.match(await page.locator('#trim-help').textContent(), new RegExp(limit));
+      assert.equal(await page.locator('#trim-label').textContent(), 'Für Discord speichern');
+      await page.click('#trim-clip');
+      const message = await page.evaluate(() => window.messages.at(-1));
+      assert.deepEqual(message, { action: 'trim', id: 1, start: 0, end: 3, mode });
+    }
+    // Invalid selections and an ongoing export still block duplicate jobs.
+    await page.fill('#trim-end', '9');
+    assert(await page.locator('#trim-clip').isDisabled());
+    await page.fill('#trim-end', '3');
+    await page.evaluate(() => window.setState({ busy: true }));
+    assert(await page.locator('#trim-clip').isDisabled());
+    assert(await page.locator('#trim-mode').isDisabled());
+    await page.evaluate(() => window.setState({ busy: false }));
+    assert(await page.locator('#trim-clip').isEnabled());
+    await page.selectOption('#trim-mode', 'discord_free');
     await page.evaluate(() => { document.querySelector('.editor').scrollTop = 0; });
     if (shotDir) await page.screenshot({ path: path.join(shotDir, 'editor-1280.png'), animations: 'disabled' });
+    await page.locator('#trim-mode').scrollIntoViewIfNeeded();
+    if (shotDir) await page.screenshot({ path: path.join(shotDir, 'discord-export-1280.png'), animations: 'disabled' });
     await page.setViewportSize({ width: 720, height: 600 });
     assert(await page.evaluate(() => {
       const box = document.querySelector('.editor').getBoundingClientRect();
@@ -108,6 +128,6 @@ const fs = require('node:fs/promises');
     }), 'Editor must fit the minimum window size');
     await page.click('#close-editor');
     assert.deepEqual(errors, []);
-    console.log('UI checks passed: recording controls during export, settings locks, navigation, square controls, 1280/720px layout, real video playback, markers and trim IPC.');
+    console.log('UI checks passed: recording controls during export, settings locks, navigation, square controls, 1280/720px layout, real video playback, markers, trim and Discord export IPC.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
