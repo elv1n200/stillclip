@@ -463,11 +463,11 @@ pub fn analyze(
             let pixels = image::open(path).map_err(|e| e.to_string())?.into_rgb8();
             let observation = reader.observe(&pixels, player, region)?;
             recognized_rows += observation.rows.len();
-            if rounds.frame(time, observation.score, observation.round_banner) {
-                moments.boundary();
-            }
             for event in tracker.frame(time, &observation.rows) {
                 moments.event(event);
+            }
+            if rounds.frame(time, observation.score, observation.round_banner) {
+                moments.boundary();
             }
             moments.advance(time);
             found.extend(moments.take_ready(time, false));

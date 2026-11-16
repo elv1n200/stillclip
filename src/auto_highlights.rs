@@ -338,14 +338,16 @@ fn run(
                 let at = (begin + index as f64 * 0.5).min(end);
                 let pixels = image::open(path).map_err(|e| e.to_string())?.into_rgb8();
                 let observation = reader.observe(&pixels, &spec.player, spec.region)?;
-                if rounds.frame(at, observation.score, observation.round_banner) {
-                    moments.boundary();
-                }
                 for event in tracker.frame(at, &observation.rows) {
                     if event.confidence == valorant::Confidence::Confirmed {
                         detected += 1;
                         moments.event(event);
                     }
+                }
+                // The final kill and the new score can stabilize in the same
+                // frame. Include that kill before closing the previous group.
+                if rounds.frame(at, observation.score, observation.round_banner) {
+                    moments.boundary();
                 }
                 moments.advance(at);
                 fs::remove_file(path).map_err(|e| e.to_string())?;
@@ -509,14 +511,9 @@ mod tests {
                 2.0,
             ),
             (
-                "three",
-                include_bytes!("../tests/fixtures/valorant/three.png"),
-                3.0,
-            ),
-            (
                 "round",
                 include_bytes!("../tests/fixtures/valorant/round.png"),
-                2.0,
+                5.0,
             ),
             (
                 "empty-next",

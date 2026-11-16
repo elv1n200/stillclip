@@ -93,6 +93,8 @@ The Windows synthetic test generates 21.5 seconds of footage from the original
 fixtures in `tests/fixtures/valorant/`. It passes the final recording snapshot to
 the actual detector after deleting the original buffer, then checks that a 3K
 and a 2K clip are saved with valid markers and all three tagged audio tracks.
+The third kill and the round change appear together, checking that the final
+kill remains in its multikill group when the score updates.
 A separate synthetic recorder test checks the stop hand-off, including its short
 final segment. No screen or microphone is captured by these tests.
 
