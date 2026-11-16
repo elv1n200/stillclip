@@ -25,6 +25,31 @@ fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
+/// Windows 11 otherwise rounds the native window even when every UI panel is
+/// square. Older Windows versions simply ignore unsupported DWM attributes.
+pub fn style_window(hwnd: isize) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_DONOTROUND,
+    };
+    let corners = DWMWCP_DONOTROUND;
+    let dark = 1_i32;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd as HWND,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            (&corners as *const i32).cast(),
+            std::mem::size_of_val(&corners) as u32,
+        );
+        DwmSetWindowAttribute(
+            hwnd as HWND,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            (&dark as *const i32).cast(),
+            std::mem::size_of_val(&dark) as u32,
+        );
+    }
+}
+
 /// Hold this handle before reading settings or recovering any buffer. Windows
 /// releases it on crashes too, so a stale lock cannot strand the application.
 pub struct InstanceGuard(windows_sys::Win32::Foundation::HANDLE);

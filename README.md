@@ -246,5 +246,6 @@ npm test
 
 Optional verwendet `CHROME_BIN` ein vorhandenes Chromium. Mit
 `STILLCLIP_SHOTS_DIR` werden Vorschauen bei 1280 und 720 Pixel Breite gespeichert.
+Die Screenshots zeigen Browser-Vorschauen mit Testdaten.
 Die Browserprüfung ersetzt keinen Windows-Test von WASAPI, Grafikkartentreibern
 oder exklusiven Vollbildspielen.
