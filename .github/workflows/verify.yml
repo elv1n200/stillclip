@@ -61,6 +61,8 @@ jobs:
       - name: Synthetic video tests (no screen or microphone capture)
         shell: pwsh
         run: |
+          ./packaging/fetch-models.ps1 -OutputDir native-artifacts/models
+          $env:STILLCLIP_MODELS_DIR = (Resolve-Path native-artifacts/models).Path
           & ./native-artifacts/stillclip-tests.exe synthetic_ --ignored --nocapture
           if ($LASTEXITCODE -ne 0) { throw 'Synthetic tests failed' }
       - name: Build online and offline installers and portable package

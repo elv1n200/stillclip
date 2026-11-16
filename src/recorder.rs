@@ -126,6 +126,7 @@ pub struct SessionInfo {
     pub width: u32,
     pub height: u32,
     pub audio: Vec<String>,
+    pub microphone: bool,
     pub warnings: Vec<String>,
 }
 
@@ -562,6 +563,7 @@ impl Recorder {
                 width,
                 height,
                 audio: audio.iter().map(|p| p.source.label().to_owned()).collect(),
+                microphone: audio.iter().any(|p| matches!(p.source, AudioSource::Microphone { .. })),
                 warnings,
             };
             let _ = fs::write(dir.join("command.txt"), description);

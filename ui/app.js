@@ -907,6 +907,7 @@
     renderEditor();
     renderState();
     $('play-pause').focus();
+    window.StillclipDesktop?.selectClip(clip);
   }
   function closeEditor() {
     cancelAnimationFrame(raf);
@@ -916,6 +917,7 @@
     $('editor-backdrop').hidden = true;
     document.body.style.overflow = '';
     selected = null;
+    window.StillclipDesktop?.selectClip(null);
     if (previousFocus && previousFocus.isConnected) previousFocus.focus();
   }
   function setSelection(start, end, { seek = null } = {}) {
@@ -1227,7 +1229,7 @@
     if (!next || typeof next !== 'object') return;
     state = { ...state, ...next, clips: Array.isArray(next.clips) ? next.clips : state.clips, settings: { ...defaultSettings, ...(next.settings || state.settings) } };
     loaded = true;
-    if (draft) { draft.custom_games = state.settings.custom_games; draft.language = state.settings.language; }
+    if (draft) { draft.custom_games = state.settings.custom_games; draft.language = state.settings.language; draft.desktop = state.settings.desktop; }
     if (window.i18n.setLanguage(state.settings.language)) {
       clipSignature = ''; markerSignature = ''; highlightSignature = '';
       for (const id of ['filter-game', 'filter-tag']) delete $(id).dataset.values;
@@ -1257,6 +1259,7 @@
     renderState();
     renderSettings();
     handleNotice();
+    window.StillclipDesktop?.setState(state);
   };
 
   document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => { if (!button.disabled) ipc(button.dataset.action); }));
@@ -1292,6 +1295,8 @@
     if (anchor) setTimeout(() => { const target = $(anchor); if (target) target.scrollIntoView({ block: 'center' }); }, 150);
   };
 
+  window.getEditorContext = () => selected ? { id: selected.id, start: sel.start, end: sel.end, crop: currentCrop() } : null;
+  window.selectEditorRange = (start, end, seek = start) => setSelection(start, end, { seek });
   function currentCrop() {
     if ($('crop-format').value === 'original') return null;
     return { width: Number($('crop-format').value), x: Number($('crop-x').value) / 100, y: Number($('crop-y').value) / 100 };

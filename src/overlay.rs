@@ -13,14 +13,20 @@ pub struct Banner {
     pub x: i32,
     pub y: i32,
     pub width_limit: i32,
+    pub scale: u32,
+    pub anchor_left: bool,
+    pub anchor_bottom: bool,
+    pub persistent: bool,
 }
 
 static BANNER: Mutex<Option<Banner>> = Mutex::new(None);
+static HUD: Mutex<Option<Banner>> = Mutex::new(None);
+static TOAST_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static OVERLAY_HWND: AtomicIsize = AtomicIsize::new(0);
 
 #[cfg(windows)]
 mod win {
-    use super::{Banner, BANNER, OVERLAY_HWND};
+    use super::{Banner, BANNER, HUD, TOAST_ACTIVE, OVERLAY_HWND};
     use std::sync::atomic::Ordering;
     use windows_sys::Win32::{
         Foundation::{HWND, POINT, SIZE},
@@ -31,6 +37,7 @@ mod win {
 
     pub const WM_OVERLAY_SHOW: u32 = 0x8000 + 40;
     pub const WM_OVERLAY_QUIT: u32 = 0x8000 + 41;
+    pub const WM_OVERLAY_HUD: u32 = 0x8000 + 42;
     const TIMER_HIDE: usize = 1;
     const PADDING_X: i32 = 22;
     const HEIGHT: i32 = 56;
@@ -43,10 +50,15 @@ mod win {
     /// Draws the banner into a premultiplied BGRA bitmap and shows it.
     unsafe fn render(hwnd: HWND, banner: &Banner) {
         unsafe {
+            let factor = banner.scale.clamp(60, 160) as f64 / 100.0;
+            let padding = (PADDING_X as f64 * factor) as i32;
+            let dot = (DOT as f64 * factor) as i32;
+            let gap = (12.0 * factor) as i32;
+            let height = (HEIGHT as f64 * factor) as i32;
             let screen = GetDC(std::ptr::null_mut());
             let memory = CreateCompatibleDC(screen);
             let font = CreateFontW(
-                -19,
+                -(19.0 * factor) as i32,
                 0,
                 0,
                 0,
@@ -67,7 +79,7 @@ mod win {
                 left: 0,
                 top: 0,
                 right: banner.width_limit.max(200),
-                bottom: HEIGHT,
+                bottom: height,
             };
             DrawTextW(
                 memory,
@@ -77,8 +89,7 @@ mod win {
                 DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX,
             );
             let text_width = (measure.right - measure.left).clamp(40, banner.width_limit.max(200));
-            let width = PADDING_X + DOT + 12 + text_width + PADDING_X;
-            let height = HEIGHT;
+            let width = padding + dot + gap + text_width + padding;
             let mut info: BITMAPINFO = std::mem::zeroed();
             info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
             info.bmiHeader.biWidth = width;
@@ -123,9 +134,9 @@ mod win {
             let pen = CreatePen(PS_NULL, 0, 0);
             let old_brush = SelectObject(memory, brush);
             let old_pen = SelectObject(memory, pen);
-            let dot_x = PADDING_X;
-            let dot_y = (height - DOT) / 2;
-            Rectangle(memory, dot_x, dot_y, dot_x + DOT + 1, dot_y + DOT + 1);
+            let dot_x = padding;
+            let dot_y = (height - dot) / 2;
+            Rectangle(memory, dot_x, dot_y, dot_x + dot + 1, dot_y + dot + 1);
             SelectObject(memory, old_brush);
             SelectObject(memory, old_pen);
             DeleteObject(brush);
@@ -134,9 +145,9 @@ mod win {
             SetBkMode(memory, TRANSPARENT as i32);
             SetTextColor(memory, 0x00f4f0ff);
             let mut rect = windows_sys::Win32::Foundation::RECT {
-                left: PADDING_X + DOT + 12,
+                left: padding + dot + gap,
                 top: 0,
-                right: width - PADDING_X,
+                right: width - padding,
                 bottom: height,
             };
             DrawTextW(
@@ -164,8 +175,8 @@ mod win {
                 }
             }
             let position = POINT {
-                x: banner.x - width,
-                y: banner.y,
+                x: if banner.anchor_left { banner.x } else { banner.x - width },
+                y: if banner.anchor_bottom { banner.y - height } else { banner.y },
             };
             let size = SIZE {
                 cx: width,
@@ -191,7 +202,7 @@ mod win {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
-            SetTimer(hwnd, TIMER_HIDE, 2600, None);
+            if !banner.persistent { SetTimer(hwnd, TIMER_HIDE, 2600, None); }
             SelectObject(memory, old_bitmap);
             SelectObject(memory, old_font);
             DeleteObject(bitmap);
@@ -213,13 +224,23 @@ mod win {
                     let banner = BANNER.lock().ok().and_then(|b| b.clone());
                     if let Some(banner) = banner {
                         KillTimer(hwnd, TIMER_HIDE);
+                        TOAST_ACTIVE.store(true, Ordering::SeqCst);
                         render(hwnd, &banner);
                     }
                     0
                 }
                 WM_TIMER => {
                     KillTimer(hwnd, TIMER_HIDE);
-                    ShowWindow(hwnd, SW_HIDE);
+                    TOAST_ACTIVE.store(false, Ordering::SeqCst);
+                    if let Some(hud) = HUD.lock().ok().and_then(|h| h.clone()) { render(hwnd, &hud); }
+                    else { ShowWindow(hwnd, SW_HIDE); }
+                    0
+                }
+                WM_OVERLAY_HUD => {
+                    if !TOAST_ACTIVE.load(Ordering::SeqCst) {
+                        if let Some(hud) = HUD.lock().ok().and_then(|h| h.clone()) { render(hwnd, &hud); }
+                        else { ShowWindow(hwnd, SW_HIDE); }
+                    }
                     0
                 }
                 WM_OVERLAY_QUIT => {
@@ -272,6 +293,8 @@ mod win {
                 return;
             }
             OVERLAY_HWND.store(hwnd as isize, Ordering::SeqCst);
+            // Keep the status HUD out of supported Windows capture APIs.
+            SetWindowDisplayAffinity(hwnd, 0x00000011);
             let _ = ready.send(true);
             let mut message = std::mem::zeroed();
             while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
@@ -317,6 +340,12 @@ impl Overlay {
         None
     }
 
+    pub fn hud(&self, banner: Option<Banner>) {
+        if let Ok(mut slot) = HUD.lock() { *slot = banner; }
+        #[cfg(windows)]
+        win::post(win::WM_OVERLAY_HUD);
+    }
+
     /// Shows the banner anchored with its top-right corner at (`x`, `y`).
     pub fn show(&self, text: &str, error: bool, x: i32, y: i32, width_limit: i32) {
         if let Ok(mut slot) = BANNER.lock() {
@@ -325,7 +354,7 @@ impl Overlay {
                 error,
                 x,
                 y,
-                width_limit,
+                width_limit, scale: 100, anchor_left: false, anchor_bottom: false, persistent: false,
             });
         }
         #[cfg(windows)]

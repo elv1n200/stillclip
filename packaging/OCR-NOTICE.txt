@@ -1,0 +1,20 @@
+Ocrs pre-trained text detection and recognition models
+Author: Robert Knight
+Source: https://huggingface.co/robertknight/ocrs
+Training code and documentation: https://github.com/robertknight/ocrs-models
+Model license: Creative Commons Attribution-ShareAlike 4.0 International
+https://creativecommons.org/licenses/by-sa/4.0/
+
+Stillclip redistributes the original ONNX files without modifying their
+contents. Local filenames have been shortened. ocr-models.json records the
+exact upstream revision, original URLs and SHA-256 hashes.
+The model license applies to these models; it does not grant or change
+the license of Stillclip's own source code. See CC-BY-SA-4.0.txt.
+
+The ocrs and RTen Rust libraries are MIT OR Apache-2.0 licensed.
+https://github.com/robertknight/ocrs
+https://github.com/robertknight/rten
+
+These general text-recognition models were not trained or validated by
+Stillclip on VALORANT killfeeds. Suggestions are experimental and require
+review. Recognized player names and video frames stay on the local device.

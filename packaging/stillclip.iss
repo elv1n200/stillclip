@@ -33,6 +33,10 @@ DisableWelcomePage=no
 InfoBeforeFile=payload\THIRD-PARTY.txt
 VersionInfoDescription=Stillclip {#Mode} installer
 VersionInfoProductName=Stillclip
+#ifdef SignedBuild
+SignTool=StillclipSign
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"

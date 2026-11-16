@@ -25,6 +25,17 @@ fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
+pub fn windows_build() -> Option<u32> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let mut data = [0u16; 64];
+    let mut bytes = std::mem::size_of_val(&data) as u32;
+    let status = unsafe { RegGetValueW(HKEY_LOCAL_MACHINE,
+        wide("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion").as_ptr(), wide("CurrentBuildNumber").as_ptr(),
+        RRF_RT_REG_SZ, std::ptr::null_mut(), data.as_mut_ptr().cast(), &mut bytes) };
+    if status != 0 { return None; }
+    String::from_utf16_lossy(&data[..data.iter().position(|c| *c == 0).unwrap_or(data.len())]).parse().ok()
+}
+
 /// Honor Windows' actual Videos folder, including redirected user folders.
 pub fn videos_dir() -> Option<PathBuf> {
     unsafe {

@@ -1,6 +1,6 @@
 [package]
 name = "stillclip"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 
 [dependencies]
@@ -9,6 +9,14 @@ tao = "0.35.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
+sha2 = "0.10"
+semver = "1"
+regex = "1"
+ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
+ocrs = { version = "0.14", default-features = false, features = ["onnx"] }
+rten = { version = "0.28", default-features = false, features = ["onnx_format"] }
+rten-imageproc = "0.28"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.61.2"
@@ -60,3 +68,27 @@ codegen-units = 4
 
 [build-dependencies]
 winresource = "0.1"
+
+[profile.dev.package.ocrs]
+opt-level = 3
+
+[profile.dev.package.rten]
+opt-level = 3
+
+[profile.dev.package.rten-gemm]
+opt-level = 3
+
+[profile.dev.package.rten-simd]
+opt-level = 3
+
+[profile.dev.package.rten-tensor]
+opt-level = 3
+
+[profile.dev.package.rten-vecmath]
+opt-level = 3
+
+[profile.dev.package.rten-imageproc]
+opt-level = 3
+
+[profile.dev.package.rten-onnx]
+opt-level = 3

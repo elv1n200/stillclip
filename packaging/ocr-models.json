@@ -1,0 +1,20 @@
+{
+  "author": "Robert Knight",
+  "license": "CC-BY-SA-4.0",
+  "source": "https://huggingface.co/robertknight/ocrs",
+  "revision": "df0edd170279ab971b53e094c627255a87e1a503",
+  "models": [
+    {
+      "file": "text-detection.onnx",
+      "url": "https://huggingface.co/robertknight/ocrs/resolve/df0edd170279ab971b53e094c627255a87e1a503/text-detection-ssfbcj81.onnx",
+      "sha256": "c15df092060abe9417929b04eaf552b98946e15144036b3c83b09a3bf4d5d5a7",
+      "bytes": 2518158
+    },
+    {
+      "file": "text-recognition.onnx",
+      "url": "https://huggingface.co/robertknight/ocrs/resolve/df0edd170279ab971b53e094c627255a87e1a503/text-rec-checkpoint-s52qdbqt.onnx",
+      "sha256": "3774cdfe8ba082a17c181d5ab0698f3ff2fd0def07cd2b9134faec9b1a191919",
+      "bytes": 9713787
+    }
+  ]
+}

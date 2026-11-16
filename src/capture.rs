@@ -543,20 +543,16 @@ fn audio_mapping(command: &mut Command, request: &CaptureRequest) {
     }
     let mut chains: Vec<String> = Vec::new();
     let mut mix: Vec<String> = Vec::new();
-    let mut microphone = None;
+    let separate = request.separate_microphone && count == 2;
     for (position, input) in request.audio.iter().enumerate() {
         let index = position + 1;
         let mut filters: Vec<String> = Vec::new();
-        if adjusted(input.gain) {
-            filters.push(format!("volume={:.3}", input.gain));
-        }
-        // The last input is the microphone; splitting it keeps the mix intact
-        // while the same samples also become their own track.
-        if request.separate_microphone && index == count {
+        if adjusted(input.gain) { filters.push(format!("volume={:.3}", input.gain)); }
+        if separate {
             filters.push("asplit=2".into());
-            chains.push(format!("[{index}:a]{}[m{index}][mic]", filters.join(",")));
+            let track = if position == 0 { "game" } else { "mic" };
+            chains.push(format!("[{index}:a]{}[m{index}][{track}]", filters.join(",")));
             mix.push(format!("[m{index}]"));
-            microphone = Some("[mic]".to_owned());
         } else if filters.is_empty() {
             mix.push(format!("[{index}:a]"));
         } else {
@@ -564,16 +560,17 @@ fn audio_mapping(command: &mut Command, request: &CaptureRequest) {
             mix.push(format!("[g{index}]"));
         }
     }
-    chains.push(format!(
-        "{}amix=inputs={count}:duration=longest:dropout_transition=0:normalize=0[a]",
-        mix.join("")
-    ));
-    command
-        .arg("-filter_complex")
-        .arg(chains.join(";"))
-        .args(["-map", "[a]"]);
-    if let Some(track) = microphone {
-        command.arg("-map").arg(track);
+    chains.push(format!("{}amix=inputs={count}:duration=longest:dropout_transition=0:normalize=0[a]", mix.join("")));
+    command.arg("-filter_complex").arg(chains.join(";")).args(["-map", "[a]"]);
+    if separate {
+        // ISO 639 local-use codes survive MPEG-TS -> MP4 remuxes. Titles do
+        // not survive the replay buffer's TS segments. Only this complete,
+        // ordered triplet is treated as editable Stillclip source tracks.
+        command.args(["-map", "[game]", "-map", "[mic]",
+            "-metadata:s:a:0", "language=qaa", "-metadata:s:a:0", "title=Stillclip mix",
+            "-metadata:s:a:1", "language=qab", "-metadata:s:a:1", "title=Stillclip game",
+            "-metadata:s:a:2", "language=qac", "-metadata:s:a:2", "title=Stillclip microphone",
+            "-disposition:a:0", "default", "-disposition:a:1", "0", "-disposition:a:2", "0"]);
     }
 }
 
@@ -843,8 +840,8 @@ mod tests {
             text.contains("[2:a]volume=1.500,asplit=2[m2][mic]"),
             "{text}"
         );
-        assert!(text.contains("[1:a][m2]amix=inputs=2"), "{text}");
-        assert!(text.contains("-map [a] -map [mic]"), "{text}");
+        assert!(text.contains("[m1][m2]amix=inputs=2"), "{text}");
+        assert!(text.contains("-map [a] -map [game] -map [mic]"), "{text}");
     }
 
     #[test]
@@ -897,7 +894,7 @@ mod tests {
             },
         );
         let text = describe(&command);
-        assert!(text.contains("-map [a] -map [mic]"), "{text}");
+        assert!(text.contains("-map [a] -map [game] -map [mic]"), "{text}");
         assert!(text.contains("[2:a]asplit=2[m2][mic]"), "{text}");
         assert!(text.contains(
             "ddagrab=output_idx=0:framerate=60:draw_mouse=0,hwdownload,format=bgra,scale=1280:720"

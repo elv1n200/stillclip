@@ -350,6 +350,7 @@ impl Default for GameProfile {
 pub struct Settings {
     #[serde(deserialize_with = "lenient")]
     pub language: crate::i18n::Language,
+    pub desktop: crate::desktop::Preferences,
     pub clips_dir: PathBuf,
     pub replay_seconds: u32,
     pub fps: u32,
@@ -393,7 +394,7 @@ pub struct Settings {
     pub close_to_tray: bool,
     pub record_on_launch: bool,
     pub start_minimized: bool,
-    /// Keep the microphone as a second audio track in addition to the mix.
+    /// Keep isolated game and microphone tracks in addition to the playback mix.
     pub microphone_separate_track: bool,
     /// Re-encode replay clips so they are exactly as long as requested.
     pub precise_clips: bool,
@@ -415,6 +416,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             language: crate::i18n::Language::default(),
+            desktop: crate::desktop::Preferences::default(),
             clips_dir: storage_paths().1,
             replay_seconds: mechanics::DEFAULT_REPLAY_SECONDS,
             fps: mechanics::DEFAULT_FPS,
@@ -441,7 +443,7 @@ impl Default for Settings {
             close_to_tray: true,
             record_on_launch: false,
             start_minimized: false,
-            microphone_separate_track: false,
+            microphone_separate_track: true,
             precise_clips: false,
             clip_sound: true,
             overlay_notifications: true,
@@ -637,7 +639,7 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
 }
 
 pub fn load_settings(config_dir: &Path) -> Settings {
-    let settings: Settings = read_json(&config_dir.join("settings.json")).unwrap_or_else(|| {
+    let mut settings: Settings = read_json(&config_dir.join("settings.json")).unwrap_or_else(|| {
         let mut settings = Settings::default();
         if !config_dir.join("settings.json").exists() {
             if let Ok(language) = fs::read_to_string(application_dir().join("initial-language.txt")) {
@@ -646,6 +648,10 @@ pub fn load_settings(config_dir: &Path) -> Settings {
         }
         settings
     });
+    // Existing installations do not get a forced onboarding screen.
+    if read_json::<serde_json::Value>(&config_dir.join("settings.json")).is_some_and(|v| v.get("desktop").is_none()) {
+        settings.desktop.welcome_complete = true;
+    }
     settings.sanitized()
 }
 

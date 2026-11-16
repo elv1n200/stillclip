@@ -1,4 +1,5 @@
-param([string]$MediaDir = 'media-artifacts', [string]$OutputDir = 'dist', [string]$NativeDir = '')
+param([string]$MediaDir = 'media-artifacts', [string]$OutputDir = 'dist', [string]$NativeDir = '',
+    [ValidatePattern('^(?:[0-9a-fA-F]{40})?$')][string]$CertificateThumbprint = '')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 Set-Location $repo
@@ -10,6 +11,14 @@ $binary = if ($NativeDir) { Join-Path $NativeDir 'stillclip.exe' } else { 'targe
 Copy-Item $binary, README.md, CREDITS.md, WINDOWS-CHECKS.md, CHANGELOG.md, CONTRIBUTING.md, MECHANICS.md, mechanics.json $payload
 Copy-Item docs (Join-Path $payload 'docs') -Recurse -Force
 Copy-Item packaging/THIRD-PARTY.txt $payload
+if ($CertificateThumbprint) {
+    & (Join-Path $PSScriptRoot 'sign-file.ps1') -File (Join-Path $payload 'stillclip.exe') -CertificateThumbprint $CertificateThumbprint
+}
+if ($NativeDir -and (Test-Path (Join-Path $NativeDir 'models'))) {
+    Copy-Item (Join-Path $NativeDir 'models') (Join-Path $payload 'models') -Recurse -Force
+}
+# Bundled in both variants and portable: analysis never downloads models at runtime.
+& (Join-Path $PSScriptRoot 'fetch-models.ps1') -OutputDir (Join-Path $payload 'models')
 $icon = if ($NativeDir) { Get-Item (Join-Path $NativeDir 'stillclip.ico') } else { Get-ChildItem target/release/build -Filter stillclip.ico -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
 if (!$icon) { throw 'Executable icon was not generated' }
 Copy-Item $icon.FullName (Join-Path $payload 'stillclip.ico')
@@ -38,8 +47,19 @@ Copy-Item packaging/stillclip.iss $stage
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 if (!(Test-Path $iscc)) { throw 'Inno Setup 6.5+ is required to build installers' }
 foreach ($mode in @('online','offline')) {
-    & $iscc "/DAppVersion=$version" "/DMode=$mode" (Join-Path $stage 'stillclip.iss')
+    $signArguments = @()
+    if ($CertificateThumbprint) {
+        $script = (Resolve-Path (Join-Path $PSScriptRoot 'sign-file.ps1')).Path
+        # Inno replaces $f with its quoted target filename and $q with a quote.
+        $signCommand = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $q' + $script + '$q -CertificateThumbprint ' + $CertificateThumbprint + ' -File $f'
+        $signArguments = @('/DSignedBuild=1', "/SStillclipSign=$signCommand")
+    }
+    & $iscc "/DAppVersion=$version" "/DMode=$mode" @signArguments (Join-Path $stage 'stillclip.iss')
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup $mode build failed" }
+    if ($CertificateThumbprint) {
+        $signed = Get-AuthenticodeSignature (Join-Path $OutputDir "stillclip-setup-$mode-x64.exe")
+        if ($signed.Status -ne 'Valid' -or $signed.SignerCertificate.Thumbprint -ne $CertificateThumbprint) { throw "Installer signature verification failed: $mode" }
+    }
 }
 # Portable users receive the same FFmpeg binaries; WebView2 is handled by setup.
 $portable = Join-Path $OutputDir 'portable'
@@ -50,6 +70,7 @@ Expand-Archive (Join-Path $stage 'stillclip-media-windows-x64.zip') (Join-Path $
 Compress-Archive "$portable/*" (Join-Path $OutputDir 'stillclip-windows-x64.zip') -Force
 $components = [ordered]@{
     version = $version
+    publisher_signed = [bool]$CertificateThumbprint
     media_sha256 = $mediaHash
     webview2_sha256 = $runtimeHash
     webview2_version = (Get-Item $runtime).VersionInfo.ProductVersion
