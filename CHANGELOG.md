@@ -8,6 +8,7 @@
 - Fast MP4 saves retain every recorded audio track. Temporary files are cleaned on completion, failure or cancellation.
 - Visual killfeed calibration in a recorded frame, with percentage fields for keyboard input. Manual review now groups related kills, labels uncertain readings, and adds every event marker when accepted.
 - Shared local OCR reads the killfeed and round context in a single inference image. No game API, game-memory access, client log or cloud processing is required.
+- Fix video-frame extraction for the bundled FFmpeg build by using supported BMP intermediate frames for both manual and automatic analysis.
 - Extend unit, browser and synthetic video checks for grouping, stop hand-off, markers, audio tracks, settings migration and cancellation. Real VALORANT accuracy and gaming performance remain unverified; automatic detection is experimental and disabled by default.
 
 ## 0.8.0 · 16 November 2026

@@ -536,10 +536,14 @@ mod tests {
         ];
         let mut list = String::from("ffconcat version 1.0\n");
         for (name, bytes, duration) in fixtures {
-            fs::write(root.join(format!("{name}.png")), bytes).unwrap();
-            list.push_str(&format!("file '{name}.png'\nduration {duration}\n"));
+            image::load_from_memory(bytes)
+                .unwrap()
+                .into_rgb8()
+                .save(root.join(format!("{name}.bmp")))
+                .unwrap();
+            list.push_str(&format!("file '{name}.bmp'\nduration {duration}\n"));
         }
-        list.push_str("file 'next-two.png'\n");
+        list.push_str("file 'next-two.bmp'\n");
         fs::write(root.join("frames.txt"), list).unwrap();
         let ffmpeg = recorder::find_ffmpeg().unwrap();
         let result = crate::capture::command(&ffmpeg)

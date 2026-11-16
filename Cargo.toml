@@ -16,7 +16,7 @@ ureq = { version = "2.12", default-features = false, features = ["tls", "json"] 
 ocrs = { version = "0.14", default-features = false, features = ["onnx"] }
 rten = { version = "0.28", default-features = false, features = ["onnx_format"] }
 rten-imageproc = "0.28"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.61.2"

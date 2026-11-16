@@ -165,18 +165,33 @@ impl Tracker {
         self.initialized = true;
         let mut used = Vec::new();
         let mut frame_names = Vec::new();
+        let visible_names: Vec<_> = rows
+            .iter()
+            .take(12)
+            .map(|r| normalized(&r.victim))
+            .collect();
         let mut events = Vec::new();
         for row in rows.iter().take(12) {
             let key = normalized(&row.victim);
             if frame_names.contains(&key) {
                 continue;
             }
-            frame_names.push(key);
+            frame_names.push(key.clone());
             let index = self
                 .tracks
                 .iter()
                 .enumerate()
-                .find(|(i, t)| !used.contains(i) && same_victim(&t.victim, &row.victim))
+                .find(|(i, t)| !used.contains(i) && normalized(&t.victim) == key)
+                .or_else(|| {
+                    self.tracks.iter().enumerate().find(|(i, t)| {
+                        // Reserve an exact match for its visible row. Otherwise a
+                        // new, similarly named victim at the top can steal an old
+                        // track and turn the old victim into the apparent new kill.
+                        !used.contains(i)
+                            && same_victim(&t.victim, &row.victim)
+                            && !visible_names.contains(&normalized(&t.victim))
+                    })
+                })
                 .map(|(i, _)| i)
                 .unwrap_or_else(|| {
                     self.tracks.push(Track {
@@ -386,6 +401,19 @@ mod tests {
         assert_eq!(name_matches("Elvin2", "Elvin"), None);
         assert_eq!(name_matches("Bob", "B0b"), None);
     }
+    #[test]
+    fn a_new_similar_victim_above_an_old_line_keeps_its_own_identity() {
+        let mut tracker = Tracker::default();
+        tracker.frame(0.0, &[row("OpponentA", true)]);
+        assert_eq!(tracker.frame(0.5, &[row("OpponentA", true)]).len(), 1);
+        let shifted = [row("OpponentB", true), row("OpponentA", true)];
+        assert!(tracker.frame(1.0, &shifted).is_empty());
+        let events = tracker.frame(1.5, &shifted);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].text, "Elvin → OpponentB");
+        assert_eq!(events[0].at, 1.0);
+    }
+
     #[test]
     fn ambiguous_names_remain_review_only_and_live_start_does_not_repeat_old_feed() {
         let mut tracker = Tracker::default();

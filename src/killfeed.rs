@@ -331,12 +331,12 @@ pub fn decode_frames(
         "-an",
         "-threads",
         "1",
-        "-compression_level",
-        "1",
+        "-c:v",
+        "bmp",
         "-frames:v",
         "24",
     ])
-    .arg(directory.join("frame-%03d.png"));
+    .arg(directory.join("frame-%03d.bmp"));
     let result = control.run(
         &mut cmd,
         length,
@@ -346,7 +346,7 @@ pub fn decode_frames(
         return Err(recorder::diagnostic(&result.stderr));
     }
     Ok((1..=24)
-        .map(|i| directory.join(format!("frame-{i:03}.png")))
+        .map(|i| directory.join(format!("frame-{i:03}.bmp")))
         .take_while(|p| p.is_file())
         .collect())
 }
