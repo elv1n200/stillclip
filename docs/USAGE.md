@@ -1,6 +1,6 @@
 # Stillclip verwenden
 
-[Zur Projektübersicht](../README.md) · [Windows-Prüfung](../WINDOWS-CHECKS.md)
+[Zur Projektübersicht](../README.md) · [English guide](USAGE.en.md) · [Windows-Prüfung](../WINDOWS-CHECKS.md)
 
 ## Sprache und Installation
 

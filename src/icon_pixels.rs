@@ -1,4 +1,4 @@
-//! The application icon, rasterized at runtime so no image assets ship.
+//! Shared pixels for runtime icons and Windows executable resources.
 //! A square outline with a square in the middle, matching the brand mark.
 
 pub const SIZE: u32 = 32;

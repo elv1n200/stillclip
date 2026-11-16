@@ -13,7 +13,7 @@ then trim it, build a highlight reel, and export it for Discord or in portrait f
 
 [![Build and tests](https://img.shields.io/badge/CI-Build_%26_Tests-e4a0b7?style=flat-square&labelColor=303030)](https://github.com/elv1n200/stillclip/actions/workflows/verify.yml) ![Windows x64](https://img.shields.io/badge/Windows-x64-171717?style=flat-square&labelColor=303030&color=e4a0b7) ![Rust + FFmpeg](https://img.shields.io/badge/Rust-FFmpeg-171717?style=flat-square&labelColor=303030&color=e4a0b7)
 
-[Quick start](#quick-start) · [Features](#features) · [User guide (German)](docs/USAGE.md) · [Changelog](CHANGELOG.md)
+[Quick start](#quick-start) · [Features](#features) · [User guide](docs/USAGE.en.md) · [Changelog](CHANGELOG.md)
 
 </div>
 
@@ -38,7 +38,7 @@ You decide what to keep and what to share.
 
 **Also included:** Window or screen capture, NVENC/AMF/Quick Sync,
 markers, a separate microphone track, recording diagnostics, and optional storage limits.
-[All features and settings (German) →](docs/USAGE.md)
+[All features and settings →](docs/USAGE.en.md)
 
 ## From gameplay to a finished clip
 
