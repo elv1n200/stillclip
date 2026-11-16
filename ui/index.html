@@ -64,7 +64,9 @@
     </aside>
 
     <main class="main">
+      <header class="window-bar"><strong>stillclip</strong><span>/</span><span>Deine Momente. Auf deinem Rechner.</span><span class="local-label">[ lokal ]</span></header>
       <section id="page-library" aria-label="Clip-Bibliothek">
+        <div class="page-heading"><h1>Bibliothek</h1><p>Aufnehmen. Markieren. Behalten.</p></div>
         <div class="setup-banner" id="setup-banner" hidden>
           <div class="setup-text"><svg><use href="#i-info"/></svg><span>Für Aufnahmen und Zuschnitte wird FFmpeg benötigt. Wähle die Datei <code>ffmpeg.exe</code> aus.</span></div>
           <button class="btn" data-action="choose_ffmpeg">FFmpeg auswählen<svg><use href="#i-arrow"/></svg></button>
@@ -105,7 +107,7 @@
             <button class="btn small" data-action="import"><svg><use href="#i-import"/></svg>Importieren</button>
           </div>
           <div class="empty-state" id="empty-state">
-            <p>Noch keine Clips.</p>
+            <p>Noch keine Clips. Starte eine Aufnahme und sichere deinen ersten Moment mit <kbd>F8</kbd>.</p>
             <button class="text-button" data-action="import">Video importieren<svg><use href="#i-arrow"/></svg></button>
           </div>
           <div class="empty-state" id="no-results" hidden>
@@ -117,7 +119,9 @@
       </section>
 
       <section class="settings" id="page-settings" aria-label="Einstellungen" hidden>
-        <div class="toolbar"><h2>Einstellungen</h2></div>
+        <div class="page-heading"><h1>Einstellungen</h1><p>So, wie du spielst.</p></div>
+        <nav class="settings-nav" aria-label="Einstellungsbereiche"></nav>
+        <p class="settings-locked" id="settings-locked" hidden>Die Aufnahme läuft. Beende sie, um Bild, Ton oder Puffer zu ändern. Tastenkürzel und Verhalten bleiben anpassbar.</p>
 
         <div class="settings-card">
           <div class="settings-card-heading"><div class="settings-icon"><svg><use href="#i-bolt"/></svg></div><div><h2>Spiele</h2><p>Erkennen und automatisch aufnehmen.</p></div></div>

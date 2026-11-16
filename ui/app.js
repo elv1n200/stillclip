@@ -19,7 +19,7 @@
     auto_record_games: true, builtin_games: true, custom_games: [],
   };
   let state = {
-    clips: [], recording: false, elapsed: 0, busy: false, status: '', error: false,
+    clips: [], recording: false, elapsed: 0, busy: false, capture_busy: false, status: '', error: false,
     ffmpeg_available: false, ffmpeg_path: null, clips_dir: '', settings: { ...defaultSettings }, autostart: false,
     displays: [], microphones: [], default_output: null,
     capabilities: { probed: false, ddagrab: false, encoders: [] }, encoders: [], selected_encoder: '',
@@ -319,7 +319,7 @@
     $('record-button').classList.toggle('btn-danger', recording);
     $('record-button').classList.toggle('btn-primary', !recording);
     $('record-button-text').textContent = recording ? 'Aufnahme beenden' : 'Aufnahme starten';
-    $('record-button').disabled = unavailable || (!recording && !state.ffmpeg_available);
+    $('record-button').disabled = !loaded || state.capture_busy || (!recording && !state.ffmpeg_available);
     $('replay-button').disabled = unavailable || !recording || !state.ffmpeg_available;
     $('replay-button-text').textContent = `${clipLength(settings.replay_seconds)} sichern`;
     const long = Number(settings.replay_seconds_long) || 0;
@@ -328,7 +328,7 @@
     $('replay-long-button-text').textContent = `${clipLength(long)} sichern`;
     $('timer').textContent = clock(state.elapsed);
     $('hotkey-replay-label').textContent = replayLabel;
-    $('mark-button').disabled = unavailable || !recording || !state.ffmpeg_available;
+    $('mark-button').disabled = !loaded || state.capture_busy || !recording || !state.ffmpeg_available;
     renderMarkers();
     const longKey = long > 0 && settings.hotkey_replay_long && settings.hotkey_replay_long.key;
     const markKey = settings.hotkey_marker && settings.hotkey_marker.key;
@@ -550,11 +550,12 @@
     $('setting-start-minimized').checked = !!settings.start_minimized;
     $('setting-autostart').checked = !!autostart;
 
-    ['setting-display', 'setting-quality', 'setting-fps', 'setting-encoder', 'setting-cursor', 'setting-system-audio', 'setting-microphone', 'setting-microphone-device', 'setting-mic-separate', 'setting-full-session', 'setting-system-volume', 'setting-microphone-volume']
+    ['setting-display', 'setting-quality', 'setting-fps', 'setting-encoder', 'setting-cursor', 'setting-system-audio', 'setting-microphone', 'setting-microphone-device', 'setting-mic-separate', 'setting-full-session', 'setting-system-volume', 'setting-microphone-volume', 'setting-follow-display', 'setting-marker-before', 'setting-marker-after', 'setting-replay', 'setting-replay-custom', 'setting-replay-long', 'setting-precise', 'setting-min-free']
       .forEach(id => { $(id).disabled = recordingLocked; });
-    ['setting-marker-before', 'setting-marker-after', 'hotkey-marker',
-      'setting-replay', 'setting-replay-custom', 'hotkey-replay', 'hotkey-replay-long', 'hotkey-record', 'setting-close-to-tray', 'setting-record-on-launch', 'setting-start-minimized', 'setting-autostart', 'setting-precise', 'setting-overlay', 'setting-clip-sound', 'setting-auto-games', 'setting-builtin-games', 'app-picker', 'add-running-app', 'refresh-apps', 'pick-game', 'setting-follow-display', 'setting-replay-long', 'setting-min-free', 'setting-storage-limit']
+    ['hotkey-marker', 'hotkey-replay', 'hotkey-replay-long', 'hotkey-record', 'setting-close-to-tray', 'setting-record-on-launch', 'setting-start-minimized', 'setting-autostart', 'setting-overlay', 'setting-clip-sound', 'setting-auto-games', 'setting-builtin-games', 'app-picker', 'add-running-app', 'refresh-apps', 'pick-game', 'setting-storage-limit']
       .forEach(id => { $(id).disabled = locked; });
+    $('settings-locked').hidden = !state.recording;
+
 
     renderStorage(settings);
     $('clips-directory').textContent = state.clips_dir || 'Wird geladen …';
@@ -1061,6 +1062,22 @@
   $('replay-long-button').addEventListener('click', () => ipc('replay_long'));
   $('mark-button').addEventListener('click', () => ipc('mark'));
   window.addEventListener('focus', () => { if (loaded && !state.busy) ipc('refresh'); });
+
+  document.querySelectorAll('.settings-card').forEach((card, index) => {
+    const heading = card.querySelector('h2');
+    card.id = `settings-section-${index}`;
+    const link = el('a', '', heading.textContent);
+    link.href = `#${card.id}`;
+    link.addEventListener('click', event => { event.preventDefault(); card.scrollIntoView({ block: 'start' }); });
+    document.querySelector('.settings-nav').append(link);
+  });
+  document.querySelectorAll('.setting-row').forEach(row => {
+    const label = row.querySelector('.setting-label');
+    if (!label) return;
+    row.querySelectorAll('input, select').forEach(input => {
+      if (!input.hasAttribute('aria-label')) input.setAttribute('aria-label', label.textContent);
+    });
+  });
 
   // Used by the automated screenshot check to render other views. A page may
   // carry an element to scroll to, for example `settings#storage-state`.

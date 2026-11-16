@@ -59,7 +59,7 @@ mod win {
                 0,
                 5,
                 0,
-                wide("Segoe UI").as_ptr(),
+                wide("Consolas").as_ptr(),
             );
             let text = wide(&banner.text);
             let old_font = SelectObject(memory, font);
@@ -69,7 +69,13 @@ mod win {
                 right: banner.width_limit.max(200),
                 bottom: HEIGHT,
             };
-            DrawTextW(memory, text.as_ptr(), -1, &mut measure, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+            DrawTextW(
+                memory,
+                text.as_ptr(),
+                -1,
+                &mut measure,
+                DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX,
+            );
             let text_width = (measure.right - measure.left).clamp(40, banner.width_limit.max(200));
             let width = PADDING_X + DOT + 12 + text_width + PADDING_X;
             let height = HEIGHT;
@@ -81,7 +87,14 @@ mod win {
             info.bmiHeader.biBitCount = 32;
             info.bmiHeader.biCompression = BI_RGB;
             let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-            let bitmap = CreateDIBSection(memory, &info, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+            let bitmap = CreateDIBSection(
+                memory,
+                &info,
+                DIB_RGB_COLORS,
+                &mut bits,
+                std::ptr::null_mut(),
+                0,
+            );
             if bitmap.is_null() || bits.is_null() {
                 SelectObject(memory, old_font);
                 DeleteObject(font);
@@ -90,9 +103,10 @@ mod win {
                 return;
             }
             let old_bitmap = SelectObject(memory, bitmap);
-            let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (width * height * 4) as usize);
+            let pixels =
+                std::slice::from_raw_parts_mut(bits as *mut u8, (width * height * 4) as usize);
             // Background: dark panel; drawn opaque, alpha is applied afterwards.
-            let (bg_b, bg_g, bg_r) = (0x24_u8, 0x1b_u8, 0x1d_u8);
+            let (bg_b, bg_g, bg_r) = (0x0d_u8, 0x0d_u8, 0x0d_u8);
             for pixel in pixels.chunks_exact_mut(4) {
                 pixel[0] = bg_b;
                 pixel[1] = bg_g;
@@ -100,14 +114,18 @@ mod win {
                 pixel[3] = 0;
             }
             // Accent dot.
-            let dot_colour = if banner.error { 0x00a9aaff_u32 } else { 0x00ffb0be_u32 };
+            let dot_colour = if banner.error {
+                0x00a9aaff_u32
+            } else {
+                0x00b7a0e5_u32
+            };
             let brush = CreateSolidBrush(dot_colour);
             let pen = CreatePen(PS_NULL, 0, 0);
             let old_brush = SelectObject(memory, brush);
             let old_pen = SelectObject(memory, pen);
             let dot_x = PADDING_X;
             let dot_y = (height - DOT) / 2;
-            Ellipse(memory, dot_x, dot_y, dot_x + DOT + 1, dot_y + DOT + 1);
+            Rectangle(memory, dot_x, dot_y, dot_x + DOT + 1, dot_y + DOT + 1);
             SelectObject(memory, old_brush);
             SelectObject(memory, old_pen);
             DeleteObject(brush);
@@ -128,23 +146,21 @@ mod win {
                 &mut rect,
                 DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
             );
-            // Rounded corners and premultiplied alpha.
-            let radius = 14.0_f32;
-            let alpha = 236_u32;
+            // Square frame and premultiplied alpha, matching the main window.
+            let alpha = 245_u32;
             for y in 0..height {
                 for x in 0..width {
                     let offset = ((y * width + x) * 4) as usize;
-                    let fx = x as f32 + 0.5;
-                    let fy = y as f32 + 0.5;
-                    let cx = fx.clamp(radius, width as f32 - radius);
-                    let cy = fy.clamp(radius, height as f32 - radius);
-                    let distance = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt();
-                    let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0);
-                    let a = (alpha as f32 * coverage) as u32;
+                    let border = x == 0 || y == 0 || x == width - 1 || y == height - 1;
                     for channel in 0..3 {
-                        pixels[offset + channel] = ((u32::from(pixels[offset + channel]) * a) / 255) as u8;
+                        let value = if border {
+                            130
+                        } else {
+                            u32::from(pixels[offset + channel])
+                        };
+                        pixels[offset + channel] = ((value * alpha) / 255) as u8;
                     }
-                    pixels[offset + 3] = a as u8;
+                    pixels[offset + 3] = alpha as u8;
                 }
             }
             let position = POINT {
@@ -163,15 +179,7 @@ mod win {
                 AlphaFormat: AC_SRC_ALPHA as u8,
             };
             UpdateLayeredWindow(
-                hwnd,
-                screen,
-                &position,
-                &size,
-                memory,
-                &origin,
-                0,
-                &blend,
-                ULW_ALPHA,
+                hwnd, screen, &position, &size, memory, &origin, 0, &blend, ULW_ALPHA,
             );
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             SetWindowPos(
@@ -193,7 +201,12 @@ mod win {
         }
     }
 
-    unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: usize, lparam: isize) -> isize {
+    unsafe extern "system" fn window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
         unsafe {
             match message {
                 WM_OVERLAY_SHOW => {
@@ -237,7 +250,11 @@ mod win {
             };
             RegisterClassW(&class);
             let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                WS_EX_LAYERED
+                    | WS_EX_TRANSPARENT
+                    | WS_EX_TOPMOST
+                    | WS_EX_TOOLWINDOW
+                    | WS_EX_NOACTIVATE,
                 class_name.as_ptr(),
                 class_name.as_ptr(),
                 WS_POPUP,
@@ -372,7 +389,11 @@ pub fn play_chime() {
     use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
     let bytes = chime();
     unsafe {
-        PlaySoundW(bytes.as_ptr().cast(), std::ptr::null_mut(), SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+        PlaySoundW(
+            bytes.as_ptr().cast(),
+            std::ptr::null_mut(),
+            SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
+        );
     }
 }
 
@@ -392,14 +413,34 @@ mod tests {
             return;
         };
         let overlay = Overlay::start().expect("overlay window");
-        let display = crate::capture::displays().into_iter().find(|d| d.primary).expect("primary display");
-        overlay.show("Moment gesichert · Counter-Strike 2 2026-11-14 07-01-02", false, display.x + display.width as i32 - 28, display.y + 28, 900);
+        let display = crate::capture::displays()
+            .into_iter()
+            .find(|d| d.primary)
+            .expect("primary display");
+        overlay.show(
+            "Moment gesichert · Counter-Strike 2 2026-11-14 07-01-02",
+            false,
+            display.x + display.width as i32 - 28,
+            display.y + 28,
+            900,
+        );
         play_chime();
         std::thread::sleep(std::time::Duration::from_millis(700));
         let ffmpeg = crate::recorder::find_ffmpeg().expect("ffmpeg");
         let status = crate::capture::command(&ffmpeg)
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
-            .arg(format!("ddagrab=output_idx={}:framerate=10:draw_mouse=0,hwdownload,format=bgra", display.output_idx))
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg(format!(
+                "ddagrab=output_idx={}:framerate=10:draw_mouse=0,hwdownload,format=bgra",
+                display.output_idx
+            ))
             .args(["-frames:v", "1"])
             .arg(shot)
             .status()
