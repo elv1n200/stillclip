@@ -7,18 +7,32 @@ pub fn redact(message: &str, private: &[String]) -> String {
     let mut text: String = message.chars().take(2400).collect();
     let mut values = private.iter().filter(|p| p.len() >= 3).collect::<Vec<_>>();
     values.sort_by_key(|p| std::cmp::Reverse(p.len()));
-    for value in values { text = text.replace(value, "[private]"); }
+    for value in values {
+        text = text.replace(value, "[private]");
+    }
     // Paths can contain spaces and quotes. Removing through the end of the
     // line deliberately favours privacy over retaining an error's suffix.
-    let paths = regex::Regex::new(r#"(?i)(?:[a-z]:[\\/]|\\\\|https?://|(?:^|[\s=\"'])/)[^\r\n]*"#).unwrap();
+    let paths =
+        regex::Regex::new(r#"(?i)(?:[a-z]:[\\/]|\\\\|https?://|(?:^|[\s=\"'])/)[^\r\n]*"#).unwrap();
     paths.replace_all(&text, " [redacted]").into_owned()
 }
 
 pub fn create(app: &crate::App) -> Value {
-    let mut private = ["USERNAME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "COMPUTERNAME"].iter()
-        .filter_map(|name| std::env::var(name).ok()).collect::<Vec<_>>();
-    private.extend([app.config.to_string_lossy().into_owned(), app.settings.clips_dir.to_string_lossy().into_owned(),
-        app.settings.desktop.player_name.clone()]);
+    let mut private = [
+        "USERNAME",
+        "USERPROFILE",
+        "LOCALAPPDATA",
+        "APPDATA",
+        "COMPUTERNAME",
+    ]
+    .iter()
+    .filter_map(|name| std::env::var(name).ok())
+    .collect::<Vec<_>>();
+    private.extend([
+        app.config.to_string_lossy().into_owned(),
+        app.settings.clips_dir.to_string_lossy().into_owned(),
+        app.settings.desktop.player_name.clone(),
+    ]);
     json!({
         "schema": 1,
         "created_utc": chrono::Utc::now().to_rfc3339(),
@@ -42,12 +56,41 @@ pub fn create(app: &crate::App) -> Value {
 
 pub fn save(report: &Value, directory: &Path) -> Result<std::path::PathBuf, String> {
     use std::io::Write;
-    let name = format!("stillclip-report-{}.json", chrono::Local::now().format("%Y%m%d-%H%M%S-%3f"));
+    let name = format!(
+        "stillclip-report-{}.json",
+        chrono::Local::now().format("%Y%m%d-%H%M%S-%3f")
+    );
     let path = directory.join(name);
-    let mut file = std::fs::OpenOptions::new().create_new(true).write(true).open(&path).map_err(|e| e.to_string())?;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
     let bytes = serde_json::to_vec_pretty(report).map_err(|e| e.to_string())?;
-    file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|e| e.to_string())?;
+    file.write_all(&bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|e| e.to_string())?;
     Ok(path)
+}
+
+pub fn media_version(mut report: Value, ffmpeg: Option<&Path>) -> Value {
+    let version = ffmpeg.and_then(|path| {
+        let mut command = crate::capture::command(path);
+        command.arg("-version");
+        let output = crate::capture::run_with_timeout(command, std::time::Duration::from_secs(3))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let token = stdout
+            .strip_prefix("ffmpeg version ")?
+            .split_whitespace()
+            .next()?;
+        (token.len() <= 100
+            && token
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b".-_+".contains(&c)))
+        .then(|| token.to_owned())
+    });
+    report["media"]["ffmpeg_version"] = json!(version);
+    report
 }
 
 #[cfg(test)]
@@ -56,12 +99,27 @@ mod tests {
     #[test]
     fn report_hides_paths_with_spaces_unc_urls_and_account_names() {
         let private = vec!["Jane Doe".to_owned(), "gamer#123".to_owned()];
-        for raw in [r#"Could not open C:\Users\Jane Doe\Videos\Secret Match.mp4: denied"#,
-            r#"Input \\NAS\private share\Secret Match.mp4"#, "decode /home/jane/Secret Match.mp4 failed",
-            "request https://example.com/?token=secret", "Jane Doe gamer#123"] {
+        for raw in [
+            r#"Could not open C:\Users\Jane Doe\Videos\Secret Match.mp4: denied"#,
+            r#"Input \\NAS\private share\Secret Match.mp4"#,
+            "decode /home/jane/Secret Match.mp4 failed",
+            "request https://example.com/?token=secret",
+            "Jane Doe gamer#123",
+        ] {
             let safe = redact(raw, &private);
-            for secret in ["Jane Doe", "gamer#123", "Secret Match", "private share", "token=secret"] { assert!(!safe.contains(secret), "{safe}"); }
+            for secret in [
+                "Jane Doe",
+                "gamer#123",
+                "Secret Match",
+                "private share",
+                "token=secret",
+            ] {
+                assert!(!safe.contains(secret), "{safe}");
+            }
         }
-        assert_eq!(redact("H.264 encoder returned error -22", &[]), "H.264 encoder returned error -22");
+        assert_eq!(
+            redact("H.264 encoder returned error -22", &[]),
+            "H.264 encoder returned error -22"
+        );
     }
 }

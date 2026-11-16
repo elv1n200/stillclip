@@ -291,6 +291,7 @@ const fs = require('node:fs/promises');
     await page.evaluate(({ settings, desktop }) => { window.messages=[]; window.setState({ settings, desktop, busy:false, recording:false, exports:[], clips:[], audio_test:{}, dragging:false }); }, { settings: desktopSettings, desktop: desktopState });
     assert(await page.locator('#setup-backdrop').isVisible());
     assert.equal(await page.locator('#setup-title').textContent(), 'Welcome to Stillclip');
+    if(shotDir)await page.screenshot({path:path.join(shotDir,'setup-en.png'),animations:'disabled'});
     assert.equal(await page.evaluate(() => window.messages.some(m=>['start','setup_test'].includes(m.action))), false);
     await page.click('#wizard-next'); await page.check('#wizard-mic'); await page.click('#wizard-next');
     await page.click('#wizard-test');
@@ -341,6 +342,6 @@ const fs = require('node:fs/promises');
     assert.match(await page.locator('#setup-open').textContent(),/Einrichtungsassistent/);
     assert.match(await page.locator('#report-open').textContent(),/Diagnosebericht/);
     assert.deepEqual(errors, []);
-    console.log('UI checks passed: German/English switching, persisted language, draft/user-content preservation, recording, profiles, favorites, tags/filters, queue progress/cancellation, audio test, native drag IPC, portrait crops/highlights, 1280/720px layout and video playback.');
+    console.log('UI checks passed: setup, update gating, reports, waveform/mix preview, killfeed review, German/English switching, persisted language, draft/user-content preservation, recording, profiles, favorites, tags/filters, queue progress/cancellation, audio test, native drag IPC, portrait crops/highlights, 1280/720px layout and video playback.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

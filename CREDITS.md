@@ -32,3 +32,15 @@ Windows resource metadata is generated with winresource (MIT).
 The recording workflow was informed by the local behavior described in the
 authorized Medal investigation. Values marked as local choices in mechanics.json
 are Stillclip's own decisions, not claims of parity with the original application.
+
+Local text recognition uses **ocrs** and **RTen** (MIT / Apache-2.0), and
+image-rs (MIT / Apache-2.0). The original pretrained ONNX models by Robert Knight
+are distributed under **CC BY-SA 4.0** without changes to their contents.
+[Model attribution](packaging/OCR-NOTICE.txt), [license](packaging/CC-BY-SA-4.0.txt),
+and [pinned source files/checksums](packaging/ocr-models.json) are included with
+the models in every installer and portable archive. Their license applies to
+the models, not to Stillclip’s own source code.
+
+Update checks use ureq (MIT / Apache-2.0), rustls (Apache-2.0 / ISC / MIT),
+RustCrypto SHA-2 (MIT / Apache-2.0), and semver (MIT / Apache-2.0).
+Report redaction uses regex (MIT / Apache-2.0).

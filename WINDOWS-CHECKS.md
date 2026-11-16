@@ -54,3 +54,14 @@ Die automatischen Tests prüfen zusätzlich Queue-Zustände, Abbruch eines echte
 FFmpeg-Prozesses, Hochkantauflösung und Bildinhalt mit synthetischen Farbflächen,
 Tagspeicherung, Pegelberechnung und das Windows-Dateiobjekt für Drag-and-drop.
 Sie ersetzen keine Aufnahme mit realen Geräten oder das Ablegen in Discord.
+
+
+## Desktop-Workflow ab 0.8
+
+- Frisches Profil: Assistent in DE/EN, kein Aufnahmebeginn beim Öffnen; Bild-/Tontest nur nach ausdrücklichem Start. Vorschau, Abbruch, Abschluss und erneutes Öffnen prüfen.
+- Während eines Tests oder einer Analyse Aufnahme anfordern: Vorgang wird abgebrochen, danach beginnt die gewünschte Aufnahme. Stoppen/Beenden darf keine FFmpeg-Prozesse oder Testaufnahmen zurücklassen.
+- HUD in allen vier Ecken und bei 60/100/160 %, DPI-Skalierung und mehreren Bildschirmen prüfen. Mikrofonfehler, Benachrichtigung und Rückkehr zum HUD testen. Keine Zusage für exklusiven Vollbildmodus.
+- Neue Aufnahme mit getrennten Quellen: Spielton und Mikrofon einzeln stummschalten und Hörvorschau/Export vergleichen. Alte Clips mit nur gemischtem Ton müssen die Einschränkung anzeigen.
+- Echte VALORANT-Aufnahmen: Namensvarianten, eigene Kills/Tode, andere Spieler, mehrfache Kills, Killfeed-Verschiebung, Auflösungen und Seitenverhältnisse prüfen. Fehlalarme und übersehene Ereignisse dokumentieren. Synthetische OCR-Tests ersetzen diese Prüfung nicht.
+- Updates ohne Netz, bei laufender Aufnahme/Export, mit manipulierten Downloads und nach heruntergeladener Dateiänderung prüfen. Signierte Updates nur mit tatsächlich vorhandener, vertrauenswürdiger Herausgeberidentität testen.
+- Diagnosevorschau auf persönliche Pfade, Kontonamen und Fehlermeldungen prüfen; Bericht lokal speichern und Originalaufnahmen unverändert lassen.

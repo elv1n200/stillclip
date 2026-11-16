@@ -37,7 +37,13 @@ You decide what to keep and what to share.
 | **Game audio & microphone.** Choose your sources and check the mix with the audio test. | **Favorites & tags.** Find clips by game, tag, date, or duration. | **Drag files out.** Drop a clip into Discord or File Explorer. |
 
 **Also included:** Window or screen capture, NVENC/AMF/Quick Sync,
-markers, a separate microphone track, recording diagnostics, and optional storage limits.
+markers, isolated game/microphone tracks, a configurable recording HUD,
+recording diagnostics, and optional storage limits.
+**Desktop workflow:** A first-run assistant with an optional ten-second test recording,
+a waveform editor with mix previews, in-app update checks, and a diagnostic report
+that you can review before sharing. Experimental local VALORANT killfeed analysis
+suggests moments for manual review; the OCR models are included in every download.
+
 [All features and settings →](docs/USAGE.en.md)
 
 ## From gameplay to a finished clip
@@ -65,7 +71,7 @@ minimizing to the system tray lets them continue.
 
 1. **Choose an installer:** [Online](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-setup-online-x64.exe) is a smaller download and fetches components during setup. [Offline](https://github.com/elv1n200/stillclip/releases/latest/download/stillclip-setup-offline-x64.exe) includes everything needed for installation.
 2. **Run setup and open Stillclip from the Start menu.** FFmpeg is included; Microsoft WebView2 is installed automatically when needed. No Rust, Python, or separate FFmpeg installation is required.
-3. **Choose your language in Settings → Interface → Language.** English and Deutsch switch immediately and stay selected after restarting. Then choose your display, audio sources, and optional game profile.
+3. **Follow the setup assistant.** Choose English or Deutsch, your capture source, quality, and audio. Optionally record a ten-second test and review it before finishing. Reopen setup or change the language later in Settings.
 4. **Click Start recording, then press <kbd>F8</kbd>.** Your saved replay appears in the library.
 
 | Download | Best for | Internet during installation |
@@ -83,12 +89,13 @@ minimizing to the system tray lets them continue.
 | Installed settings | `%LOCALAPPDATA%\Stillclip\settings`. Updates and uninstall keep your data. |
 | Portable storage | `clips/` and `settings/` next to `stillclip.exe`, as in previous releases. |
 
-Quit Stillclip before updating. Both installers update the same application; you can switch between them.
+Use **Settings → Desktop & setup → Updates** to check release notes and download a verified update. Installed copies can launch setup after Stillclip closes; portable copies show the verified ZIP for manual replacement. Both installers update the same application; you can switch between them.
 [Installation, portable migration, checksums, and uninstall →](docs/INSTALLATION.md)
 
 ## Good to know
 
 - Recording controls remain available during exports. Actual game performance depends on your PC, encoder, and settings.
+- Highlight suggestions are experimental, currently support ASCII player names, and can miss or misread scenes. No accuracy claim is made for real matches. Review suggestions before keeping them.
 - Automated tests cover application logic, the interface, and synthetic media. Real recording, audio devices, and dropping files into Discord also need [hands-on Windows testing (German checklist)](WINDOWS-CHECKS.md).
 - Favorites are protected from automatic cleanup. You can still delete them manually; automatic deletion is disabled by default.
 - Discord limits may change. The current presets and their source are documented in the [Discord export guide (German)](docs/USAGE.md#für-discord-speichern).
@@ -101,6 +108,7 @@ On Windows, with Rust and the Microsoft C++ Build Tools installed:
 git clone https://github.com/elv1n200/stillclip.git
 cd stillclip
 cargo build --locked --release
+./packaging/fetch-models.ps1 -OutputDir target/release/models
 ```
 
 The executable is written to `target/release/stillclip.exe`.

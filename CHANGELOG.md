@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 · 16 November 2026
+
+- First-run setup in English and German, with an explicitly started ten-second video/audio test and a disposable preview. Existing profiles can reopen the assistant without being forced through it.
+- Waveforms, independent game/microphone gain and mute controls for newly recorded isolated tracks, short audio mix previews, and precise exports that preserve the original clip. Legacy mixed audio is clearly identified.
+- Configurable recording HUD with four positions, adjustable size, actual microphone-source status, and time since the last saved clip.
+- Explicit update checks, release notes, bounded downloads verified against GitHub SHA-256 metadata, and publisher checks before launching setup. Active recordings and exports are preserved. Portable updates retain a manual replacement step.
+- Preview and save a diagnostic JSON report with application/Windows/FFmpeg versions, encoder capabilities and redacted errors; no automatic upload.
+- Experimental offline VALORANT killfeed analysis with bundled, checksum-pinned OCR models, cancellable processing and manual review. Supports ASCII player names and a configurable region; real-match accuracy still needs evaluation.
+- Optional Windows certificate-store signing for the app, installers and uninstallers. Trusted signing requires the owner’s certificate/provider; default builds remain unsigned.
+- Extend synthetic media, OCR, interface and installation checks; keep analysis source clips protected and resume requested recording after cancelling analysis.
+
 ## 0.7.0 · 16 November 2026
 
 - Switch between English and German instantly in Settings. The choice persists and also applies to native menus, dialogs, and app-owned errors.

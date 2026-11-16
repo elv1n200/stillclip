@@ -350,6 +350,7 @@ impl Default for GameProfile {
 pub struct Settings {
     #[serde(deserialize_with = "lenient")]
     pub language: crate::i18n::Language,
+    #[serde(deserialize_with = "lenient")]
     pub desktop: crate::desktop::Preferences,
     pub clips_dir: PathBuf,
     pub replay_seconds: u32,
@@ -690,6 +691,21 @@ pub fn write_atomically(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_migration_and_desktop_preferences_preserve_existing_capture_settings() {
+        let root = std::env::temp_dir().join(format!("stillclip-setup-settings-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let fresh = load_settings(&root); assert!(!fresh.desktop.welcome_complete);
+        fs::write(root.join("settings.json"), br#"{"language":"en","fps":120,"quality":"p1080"}"#).unwrap();
+        let existing = load_settings(&root);
+        assert!(existing.desktop.welcome_complete); assert_eq!(existing.fps, 120); assert_eq!(existing.quality, Quality::P1080);
+        let mut changed = existing.clone(); changed.desktop.hud_enabled = !existing.desktop.hud_enabled;
+        changed.desktop.player_name = "Elvin".into(); changed.desktop.automatic_updates = true;
+        assert!(!existing.capture_changed(&changed));
+        save_settings(&root, &changed).unwrap(); assert_eq!(load_settings(&root), changed);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     struct TestDir(PathBuf);
 

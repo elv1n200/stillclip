@@ -248,3 +248,68 @@ beenden. Spiele, Tastenkürzel, Ordnerlimit und Verhalten bleiben anpassbar.
   sich nur über den Standardplayer öffnen.
 
 Technische Hintergründe und die dokumentierte Herkunft einzelner Verhaltensregeln stehen in [MECHANICS.md](../MECHANICS.md).
+
+
+## Einrichtung, HUD und Updates
+
+Neue Profile öffnen den Einrichtungsassistenten. Sprache, Aufnahmequelle,
+Qualität und Ton lassen sich in drei Schritten wählen. Nur der Knopf
+**10 Sekunden testen** startet die Testaufnahme. Die temporäre Vorschau wird
+beim Schließen entfernt. Automatische Spielaufnahme lässt sich dort ausdrücklich
+wählen. Bestehende Profile öffnen den Assistenten bei Bedarf unter
+**Einstellungen → Desktop & Einrichtung**.
+
+Dort stehen auch die vier HUD-Positionen und eine Größe von 60–160 % zur Wahl.
+Das HUD zeigt Aufnahmezeit, die tatsächlich geöffnete Mikrofonquelle und die Zeit
+seit dem letzten gespeicherten Clip. Es funktioniert bei Spielen im Fenster oder
+randlosen Vollbild; exklusiver Vollbildmodus kann es verdecken.
+
+**Auf Updates prüfen** lädt Versionsinformationen von GitHub. Automatische
+Startprüfungen sind zunächst aus. Downloads werden anhand der veröffentlichten
+Größe und SHA-256-Prüfsumme kontrolliert. Installierte Exemplare können nach dem
+Beenden den Installer starten; bei Portable wird das geprüfte ZIP zur manuellen
+Übernahme angezeigt. Aufnahme, Tests und Exporte müssen vorher abgeschlossen sein.
+Eine signierte Installation akzeptiert nur gültige Signaturen desselben
+Herausgebers. Ein Hash ersetzt keine Herausgebersignatur.
+
+## Audiomix bearbeiten
+
+Im Clipeditor **Audio & Wellenform → Wellenform laden** öffnen. Neue Aufnahmen
+mit aktivierter Option für getrennte Tonspuren enthalten neben dem normalen Mix
+auch Spielton und Mikrofon einzeln. Lautstärke und Stummschaltung lassen sich dann
+unabhängig ändern. Bei alten oder importierten Clips ohne getrennte Spuren steht
+nur die Gesamtlautstärke zur Verfügung. Bereits gemischten Mikrofonton kann
+Stillclip nicht nachträglich isolieren.
+
+**Mix anhören (bis 20 s)** spielt eine temporäre Audiovorschau ab dem gewählten
+Anfang. Die Videovorschau verwendet weiter den Originalton. **Bereich mit Audiomix
+speichern** erstellt einen neuen, präzise geschnittenen Clip einschließlich eines
+gewählten Hochkant-Zuschnitts. Der Originalclip bleibt unverändert. Für Discord
+oder ein Highlight-Reel anschließend den neuen Clip auswählen. Wellenformen
+unterstützen Videos bis sechs Stunden; die vorübergehende PCM-Datei wird nach
+der Verarbeitung oder einem Abbruch entfernt.
+
+## VALORANT-Vorschläge ausprobieren
+
+Die lokale Killfeed-Erkennung ist experimentell. Im Clip einen Bereich von
+höchstens 30 Minuten wählen, **VALORANT · Highlight-Vorschläge** öffnen und den
+sichtbaren Namen ohne Riot-#Tag eintragen. Derzeit werden lateinische
+ASCII-Zeichen und mindestens drei Zeichen unterstützt. Den Killfeed-Ausschnitt
+bei abweichenden Bildschirmformaten über Prozentwerte anpassen.
+
+Nach **Bereich analysieren** lassen sich Vorschläge ansehen und einzeln als
+Markierung übernehmen. Es wird nichts automatisch exportiert. Die Analyse
+verwendet mitgelieferte OCR-Modelle auf dem eigenen Gerät, ohne Spielzugriff oder
+Upload. Sie kann Szenen übersehen oder falsch zuordnen. Automatische Tests
+verwenden synthetische Bilder; eine Trefferquote für echte Matches ist noch
+nicht belegt. Eine angeforderte Aufnahme bricht die Analyse ab und startet,
+sobald deren Verarbeitung beendet ist.
+
+## Diagnosebericht
+
+**Einstellungen → Desktop & Einrichtung → Diagnosebericht ansehen** zeigt den
+Inhalt vor dem Speichern. Er enthält Versionen, Encoder, Aufnahmeparameter und
+gekürzte Fehlermeldungen. Persönliche Pfade, lokale Kontonamen und URLs werden
+aus Fehlermeldungen entfernt; Videos, vollständige Einstellungen, Geräte-IDs und
+Fenstertitel werden nicht beigefügt. Den Bericht vor dem Teilen prüfen. Stillclip
+lädt ihn nicht automatisch hoch.

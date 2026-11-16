@@ -286,7 +286,7 @@ pub fn cached_capabilities(ffmpeg: &Path, config_dir: &Path) -> Option<Capabilit
         .then_some(cache.capabilities)
 }
 
-fn run_with_timeout(mut command: Command, timeout: Duration) -> Option<std::process::Output> {
+pub(crate) fn run_with_timeout(mut command: Command, timeout: Duration) -> Option<std::process::Output> {
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

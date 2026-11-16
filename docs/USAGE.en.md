@@ -13,6 +13,13 @@ Choose **Settings → Interface → Language → English** or **Deutsch**. The c
 is immediate and saved automatically, including native menus and dialogs. Other
 settings you are editing remain unsaved until you click **Save settings**.
 
+New profiles open a three-step assistant: language/source, video/audio, then an
+optional ten-second test. Press **Test for 10 seconds** to start capture; opening
+the assistant alone does not record. Review the temporary video and finish with
+or without a test. Closing the preview removes it. Automatic game recording is
+an explicit option in the assistant. Existing users can reopen it under
+**Settings → Desktop & setup**.
+
 The online and offline installers both provide FFmpeg and handle WebView2.
 Choose your display, recording quality, FPS, and audio sources in Settings.
 Hardware encoding uses NVIDIA NVENC, AMD AMF, or Intel Quick Sync when supported;
@@ -100,3 +107,74 @@ If recording fails, check the selected display/window, available disk space,
 GPU driver, encoder, and audio devices. Keep personal clips and paths private
 when reporting a problem. Include the Stillclip version, Windows build, selected
 capture mode, and the relevant error message in an issue.
+
+## Waveforms and independent audio editing
+
+Open a clip and expand **Audio & waveform**, then **Load waveform**. Click the
+waveform to seek. For recordings made with both audio sources and **Also save
+game audio and microphone separately**, Stillclip saves a default playback mix
+plus isolated game and microphone tracks. Adjust either source from 0–200% or
+mute it. Existing recordings without these identified source tracks only offer
+a single overall volume; a microphone already mixed into the sound cannot be
+removed independently.
+
+**Listen to mix (up to 20s)** creates a temporary audio preview from the start
+of the selected range. The video player continues to use the original sound.
+**Save selection with audio mix** creates a new, precisely trimmed MP4 using
+the selected portrait crop when set. Your original stays unchanged. Open the
+new clip for a Discord export or add it to a highlight reel. The original
+retains its isolated tracks for future edits; the new export contains the chosen
+mix. Waveforms accept clips up to six hours long and use a temporary PCM file
+while processing. A cancel button stops processing and removes temporary files.
+
+## Recording HUD
+
+Settings → Desktop & setup controls the recording HUD. Pick a corner and a
+size from 60–160%. It shows recording time, whether the microphone source was
+successfully opened, and elapsed time since a clip was saved. It is click-through
+and works in windowed/borderless games; exclusive fullscreen may hide it.
+Supported Windows capture APIs exclude the HUD from the recording. The existing
+short notifications briefly replace the HUD and then restore it.
+
+## Local VALORANT suggestions (experimental)
+
+Open a recording, select a range of up to 30 minutes, and expand **VALORANT ·
+highlight suggestions**. Enter the name displayed in the killfeed without the
+Riot #tag. Currently the recognition path supports Latin ASCII names of at least
+three characters. Adjust the killfeed crop percentages for different layouts
+or aspect ratios. Click **Analyze selection**.
+
+This analyzes saved video locally using bundled OCR models. It does not access
+game memory, inject an overlay into the game, or upload video or recognized names.
+The detector looks for your name in the killer position, requires repeated
+observations, and suppresses persistent duplicate lines. It can still misread
+names, mistake text, and miss events. Automated checks use a synthetic image,
+not real VALORANT match footage; real-match accuracy has not been established.
+
+Use **Preview range** to inspect each suggestion, then **Keep marker** for the
+ones you want. Nothing is automatically exported. You can add a reviewed range
+to the existing highlight list. A recording request cancels analysis and starts
+capture once the worker has stopped. Only one analysis/test/update task runs at
+a time. Long analyses may take several minutes.
+
+## Updates and diagnostic reports
+
+In **Settings → Desktop & setup**, click **Check for updates** to read the latest
+stable release notes. Optional startup checks are off by default. Checking and
+downloading contact GitHub; recording and local editing work offline.
+
+The app verifies a download’s size and SHA-256 hash using GitHub release metadata,
+then rechecks the file before use. Installed copies offer **Install & close
+Stillclip** and start setup after the app exits. A validly signed installation
+requires the update to have a valid signature from the same publisher. SHA-256
+verification does not create a publisher signature. Portable copies reveal the
+verified ZIP for manual extraction; see the [installation guide](INSTALLATION.md).
+No update stops a recording or discards an export.
+
+**Preview diagnostic report** shows the exact JSON before you choose a destination
+folder with **Save report**. It includes versions, capture configuration,
+encoder capabilities and a bounded list of recent errors. Personal paths, local
+account identifiers and URLs in errors are redacted. It excludes recordings,
+full settings, device IDs and window titles. Review before sharing: unexpected
+third-party error text can still contain information you prefer to remove.
+Nothing is automatically sent anywhere.

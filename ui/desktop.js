@@ -16,6 +16,7 @@
     step1: ['1 / Sprache & Aufnahmequelle', '1 / Language & capture source'], step2: ['2 / Bild & Ton', '2 / Video & audio'], step3: ['3 / Test & Abschluss', '3 / Test & finish'],
     language: ['Sprache', 'Language'], game: ['Spiel', 'Game'], screen: ['Bildschirm', 'Display'], desktopSource: ['Bildschirm / manuell', 'Display / manual'],
     window: ['Nur das Spielfenster aufnehmen', 'Capture only the game window'], gameAudio: ['Nur den Spielton aufnehmen', 'Capture only game audio'],
+    automaticGames: ['Erkannte Spiele automatisch aufnehmen', 'Record detected games automatically'],
     sourceHelp: ['Für Fensteraufnahme und Spielton muss das gewählte Spiel laufen. Ohne diese Optionen wird der gewählte Bildschirm mit Systemton aufgenommen.', 'The selected game must be running for window capture and game audio. Otherwise, capture uses the selected display and system audio.'],
     quality: ['Qualität', 'Quality'], fps: ['Bildrate', 'Frame rate'], system: ['System- / Spielton', 'System / game audio'], mic: ['Mikrofon', 'Microphone'],
     micDevice: ['Mikrofon-Gerät', 'Microphone device'], defaultDevice: ['Windows-Standard', 'Windows default'], separate: ['Spielton und Mikrofon zusätzlich getrennt speichern', 'Also save game audio and microphone separately'],
@@ -26,9 +27,9 @@
     listenMix: ['Mix anhören (bis 20 s)', 'Listen to mix (up to 20s)'],
     audioTitle: ['Audio & Wellenform', 'Audio & waveform'], analyzeAudio: ['Wellenform laden', 'Load waveform'], saveMix: ['Bereich mit Audiomix speichern', 'Save selection with audio mix'],
     audioHelp: ['Lade die Audiospuren, um die Lautstärke zu bearbeiten. Das Speichern erstellt einen neuen Clip.', 'Load the audio tracks to edit their volume. Saving creates a new clip.'],
-    mixedHelp: ['Dieser Clip enthält bereits gemischten Ton. Spiel und Mikrofon lassen sich darin nicht unabhängig entfernen.', 'This clip already contains mixed audio. Game audio and microphone cannot be removed independently.'],
+    mixedHelp: ['Spielton und Mikrofon sind in diesem Clip nicht als getrennte Spuren verfügbar.', 'Game audio and microphone are not available as separate tracks in this clip.'],
     separatedHelp: ['Spielton und Mikrofon sind getrennt bearbeitbar. Die Videovorschau spielt den ursprünglichen Mix.', 'Game audio and microphone can be edited separately. Video preview plays the original mix.'],
-    noAudio: ['Dieser Clip enthält keinen Ton.', 'This clip has no audio.'], gameTrack: ['Spielton', 'Game audio'], micTrack: ['Mikrofon', 'Microphone'], mixedTrack: ['Gemischter Ton', 'Mixed audio'], mute: ['Stumm', 'Mute'],
+    noAudio: ['Dieser Clip enthält keinen Ton.', 'This clip has no audio.'], gameTrack: ['Spielton', 'Game audio'], micTrack: ['Mikrofon', 'Microphone'], mixedTrack: ['Tonspur', 'Audio track'], mute: ['Stumm', 'Mute'],
     suggestions: ['VALORANT · Highlight-Vorschläge', 'VALORANT · highlight suggestions'], experimental: ['Experimentell · nur lokal', 'Experimental · local only'],
     killfeedHelp: ['Analysiert den markierten Bereich, maximal 30 Minuten. Namen und Killfeed-Layout können die Erkennung beeinflussen. Prüfe jeden Vorschlag; es wird nichts automatisch exportiert.', 'Analyzes the selected range, up to 30 minutes. Names and killfeed layout can affect recognition. Review each suggestion; nothing is exported automatically.'],
     player: ['Dein Name im Killfeed', 'Your name in the killfeed'], playerHelp: ['Ohne #Tag; derzeit lateinische ASCII-Zeichen. Der Name bleibt auf diesem Gerät.', 'Without #tag; currently Latin ASCII characters. The name stays on this device.'],
@@ -68,7 +69,7 @@
       <div class="desktop-row"><label for="wizard-game">${label('game')}</label><select id="wizard-game"></select></div>
       <div class="desktop-row"><label for="wizard-display">${label('screen')}</label><select id="wizard-display"></select></div>
       <label class="desktop-check"><input type="checkbox" id="wizard-window">${label('window')}</label>
-      <label class="desktop-check"><input type="checkbox" id="wizard-game-audio">${label('gameAudio')}</label><p class="desktop-help">${label('sourceHelp')}</p>
+      <label class="desktop-check"><input type="checkbox" id="wizard-game-audio">${label('gameAudio')}</label><p class="desktop-help">${label('sourceHelp')}</p><label class="desktop-check"><input type="checkbox" id="wizard-auto-games">${label('automaticGames')}</label>
     </div>
     <div class="setup-step" data-step="1" hidden><h3>${label('step2')}</h3>
       <div class="desktop-row"><label for="wizard-quality">${label('quality')}</label><select id="wizard-quality"><option value="p720">720p</option><option value="p1080">1080p</option><option value="p1440">1440p</option><option value="native">Native</option></select></div>
@@ -112,7 +113,7 @@
   function readWizard() {
     if (!wizard) return;
     Object.assign(wizard, { language: $('wizard-language').value, target_exe: $('wizard-game').value, display: $('wizard-display').value,
-      capture_window: $('wizard-window').checked, game_audio: $('wizard-game-audio').checked, quality: $('wizard-quality').value,
+      auto_record_games: $('wizard-auto-games').checked, capture_window: $('wizard-window').checked, game_audio: $('wizard-game-audio').checked, quality: $('wizard-quality').value,
       fps: Number($('wizard-fps').value), system_audio: $('wizard-system').checked, microphone: $('wizard-mic').checked,
       microphone_device: $('wizard-mic-device').value, microphone_separate_track: $('wizard-separate').checked });
   }
@@ -124,8 +125,8 @@
     options('wizard-game', [['', t('desktopSource')], ...games.map(g => [g.exe, g.name]), ...(wizard.target_exe && !games.some(g => g.exe === wizard.target_exe) ? [[wizard.target_exe,wizard.target_exe]] : [])], wizard.target_exe);
     options('wizard-display', [['', t('defaultDevice')], ...(state.displays || []).map(d => [d.name, d.label])], wizard.display);
     options('wizard-mic-device', [['', t('defaultDevice')], ...(state.microphones || []).map(d => [d.id, d.name])], wizard.microphone_device);
-    $('wizard-window').checked = wizard.capture_window; $('wizard-game-audio').checked = wizard.game_audio;
-    $('wizard-quality').value = wizard.quality; $('wizard-fps').value = [30,60].includes(wizard.fps) ? wizard.fps : 60;
+    $('wizard-auto-games').checked = wizard.auto_record_games; $('wizard-window').checked = wizard.capture_window; $('wizard-game-audio').checked = wizard.game_audio;
+    $('wizard-quality').value = wizard.quality; options('wizard-fps',(state.fps_choices || [24,30,60,120,144]).map(fps=>[String(fps),fps+' FPS']),String(wizard.fps));
     $('wizard-system').checked = wizard.system_audio; $('wizard-mic').checked = wizard.microphone; $('wizard-separate').checked = wizard.microphone_separate_track;
     $('setup-backdrop').hidden = false; document.body.style.overflow = 'hidden'; renderWizard(); $('wizard-language').focus();
   }
@@ -214,6 +215,7 @@
     if (!autoShown && !preferences.welcome_complete && idle()) { autoShown = true; openWizard(); }
   }
   $('setup-open').addEventListener('click',openWizard); $('setup-close').addEventListener('click',closeWizard);
+  $('wizard-game').addEventListener('change',()=>{ if(!$('wizard-game').value){$('wizard-window').checked=false;$('wizard-game-audio').checked=false;}readWizard(); });
   $('wizard-language').addEventListener('change',()=>{ readWizard(); ipc('set_language',{language:wizard.language}); });
   $('wizard-next').addEventListener('click',()=>{readWizard(); step=Math.min(2,step+1);renderWizard();});
   $('wizard-back').addEventListener('click',()=>{readWizard();step=Math.max(0,step-1);renderWizard();});

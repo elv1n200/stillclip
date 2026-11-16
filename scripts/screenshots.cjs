@@ -41,7 +41,7 @@ const scene = index => {
     page.on('pageerror', e => errors.push(e.message));
     await page.route('http://app.localhost/**', route => {
       const file = new URL(route.request().url()).pathname.slice(1) || 'index.html';
-      if (!['index.html','app.css','i18n.js','app.js'].includes(file)) return route.abort();
+      if (!['index.html','app.css','desktop.css','i18n.js','desktop.js','app.js'].includes(file)) return route.abort();
       return route.fulfill({ path: path.join(root,'ui',file), contentType: file.endsWith('.html')?'text/html':file.endsWith('.css')?'text/css':'text/javascript' });
     });
     await page.route('http://clip.localhost/**', route => {

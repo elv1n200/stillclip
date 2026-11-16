@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   const english = {
+  "Desktop & Einrichtung": "Desktop & setup",
   "Hauptnavigation": "Main navigation",
   "Bibliothek": "Library",
   "Einstellungen": "Settings",

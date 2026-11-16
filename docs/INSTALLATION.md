@@ -4,7 +4,8 @@
 
 Stillclip runs locally on Windows x64 (Windows 11 recommended; Windows 10 build
 19041 or later). Users do not need Rust, Python, developer tools, or a separate
-FFmpeg installation.
+FFmpeg installation. The local OCR models are bundled with both installers
+and the portable ZIP; no model download or Windows OCR language pack is needed.
 
 ## Choose your download
 
@@ -121,3 +122,33 @@ a local server with the exact release component files. A runner with WebView2
 already present does not reproduce a fresh Windows installation of that runtime.
 Real game capture, audio devices, and GPU performance still require hardware
 checks described in [WINDOWS-CHECKS.md](../WINDOWS-CHECKS.md).
+
+## Updating from inside the app
+
+Open **Settings → Desktop & setup → Check for updates**. Read the release notes,
+download the offered package, and wait for SHA-256 verification. For installed
+copies, **Install & close Stillclip** starts normal setup after the app exits.
+The app refuses this action while recording, exporting, testing, or analyzing.
+Automatic checks at startup are optional and disabled by default.
+
+For portable copies, **Show portable package** reveals the verified ZIP. Close
+Stillclip, extract it into a new writable folder, then copy your old `settings/`
+folder and keep your clips in their existing location. If clips were beside the
+old EXE, move or copy that folder as well, or point the new copy at it in Settings.
+Keep the old copy until you have checked the new one. Portable updates do not
+silently turn a portable profile into an installed one.
+
+Downloads are checked against GitHub's SHA-256 asset digest and advertised size.
+An installed update also undergoes Windows Authenticode checks; a signed current
+EXE requires the same publisher on the new installer. An unsigned build remains
+unsigned even when its SHA-256 hash matches. A failed check leaves your running
+version and data intact.
+
+## Publisher signatures
+
+Default builds remain unsigned until an owner-controlled, trusted signing
+certificate or service is configured. The build supports signing the app,
+both installers and the generated uninstaller through the Windows certificate
+store. See [Signing releases](SIGNING.md). A self-signed certificate is not a
+replacement for a publicly trusted publisher certificate, and even a valid
+signature does not guarantee that SmartScreen never prompts.

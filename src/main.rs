@@ -90,6 +90,7 @@ pub enum AppEvent {
     ClipMarkers(PathBuf, Vec<f64>),
     ScreenshotFinished(Result<(), String>),
     DesktopFinished(u64, Result<desktop::Output, String>),
+    ReportReady(u64, Value),
 }
 
 pub struct JobOutcome {
@@ -404,6 +405,7 @@ impl App {
                     && !self.capture.transitioning
                     && self.exports.is_empty()
                     && self.dragging.is_none()
+                    && self.desktop.task.is_none()
                 {
                     self.enforce_storage_limit(&mut clips);
                 }
@@ -1080,7 +1082,7 @@ impl App {
         command: &Value,
         proxy: EventLoopProxy<AppEvent>,
     ) -> Result<(), String> {
-        if self.audio_test.active.is_some() || self.recording || self.capture.transitioning {
+        if self.audio_test.active.is_some() || self.recording || self.capture.transitioning || self.desktop.task.is_some() {
             return Err(crate::i18n::text("Beende zuerst die Aufnahme oder den laufenden Audio-Test.", "Stop the recording or running audio test first.").into());
         }
         let ffmpeg = self
@@ -1247,7 +1249,7 @@ impl App {
             settings.clips_dir = self.settings.clips_dir.clone();
         }
         let settings = settings.sanitized();
-        if !self.exports.is_empty() && settings.clips_dir != self.settings.clips_dir {
+        if (!self.exports.is_empty() || self.desktop.task.is_some()) && settings.clips_dir != self.settings.clips_dir {
             self.message(Err(
                 crate::i18n::text("Beende zuerst die Exportliste, bevor du den Clip-Ordner änderst.", "Finish the export queue before changing the clips folder.").into(),
             ));
@@ -1366,7 +1368,7 @@ impl App {
         if matches!(action, "choose_folder" | "choose_ffmpeg")
             && (!self.exports.is_empty()
                 || self.audio_test.active.is_some()
-                || self.dragging.is_some())
+                || self.dragging.is_some() || self.desktop.task.is_some())
         {
             self.message(Err(crate::i18n::text("Beende zuerst die Exportliste.", "Finish the export queue first.").into()));
             return;
@@ -2132,6 +2134,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 app.sync(&view);
             }
+            Event::UserEvent(AppEvent::ReportReady(id, report)) => {
+                if id == app.desktop.report_sequence { app.desktop.report = Some(report); app.sync(&view); }
+            }
             Event::UserEvent(AppEvent::DesktopFinished(id, result)) => {
                 app.desktop_finished(id, result);
                 app.advance_capture(proxy.clone());
@@ -2299,7 +2304,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::UserEvent(AppEvent::Finished(result)) => {
                 app.finish(result, proxy.clone());
                 app.sync(&view);
-                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() {
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() && app.desktop.task.is_none() {
                     *control_flow = ControlFlow::Exit;
                 }
             }
@@ -2359,7 +2364,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         std::process::exit(1);
                     }
                 }
-                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() { *control_flow = ControlFlow::Exit; }
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() && app.desktop.task.is_none() { *control_flow = ControlFlow::Exit; }
                 if app.audio_test.active.is_some() { app.audio_test.poll(); app.sync(&view); }
                 if !checking { app.update_hud(); }
                 if app.desktop.task.is_some() { app.sync(&view); }
@@ -2399,6 +2404,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Event::LoopDestroyed => {
                 app.cancel_background();
+                app.desktop.preview = None;
+                app.desktop.audio_preview = None;
+                app.audio_test.preview = None;
                 app.index.save(&app.config);
                 app.recorder.take();
                 app.watcher.take();

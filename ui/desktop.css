@@ -4,6 +4,9 @@
 .desktop-row { display: flex; justify-content: space-between; gap: 18px; align-items: center; }
 .desktop-row > label { flex: 1; }
 .desktop-row select, .desktop-row input:not([type=checkbox]) { max-width: 260px; }
+.desktop-row input:not([type=checkbox]):not([type=range]), .killfeed-region input { background: #090909; color: #dedede; border: 1px solid #353535; font: inherit; padding: 8px 10px; min-width: 0; }
+.desktop-check input, .waveform-controls input { accent-color: #e5a0b7; }
+.desktop-row input:focus-visible, .killfeed-region input:focus-visible { outline: 2px solid #e5a0b7; outline-offset: 2px; }
 .desktop-check { display: flex; align-items: center; gap: 10px; }
 .desktop-notes { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflow: auto; color: var(--muted, #a0a0a0); font: inherit; }
 .desktop-progress { margin: 16px 0; border: 1px solid var(--border, #353535); padding: 12px 16px; display: grid; gap: 10px; }

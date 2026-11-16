@@ -1,13 +1,15 @@
 Ocrs pre-trained text detection and recognition models
-Author: Robert Knight
-Source: https://huggingface.co/robertknight/ocrs
+Author: Robert Knight / Ocrs project contributors
+Ocrs models (https://github.com/robertknight/ocrs-models), trained on the
+HierText dataset by Google Research. Licensed under CC BY-SA 4.0.
+Dataset: https://github.com/google-research-datasets/hiertext
 Training code and documentation: https://github.com/robertknight/ocrs-models
 Model license: Creative Commons Attribution-ShareAlike 4.0 International
 https://creativecommons.org/licenses/by-sa/4.0/
 
 Stillclip redistributes the original ONNX files without modifying their
-contents. Local filenames have been shortened. ocr-models.json records the
-exact upstream revision, original URLs and SHA-256 hashes.
+contents. ocr-models.json records the official distribution recipe, license
+source, original download URLs and exact SHA-256 hashes.
 The model license applies to these models; it does not grant or change
 the license of Stillclip's own source code. See CC-BY-SA-4.0.txt.
 

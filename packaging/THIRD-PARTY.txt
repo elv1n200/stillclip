@@ -14,3 +14,8 @@ The Stillclip uninstaller leaves this shared runtime installed.
 
 Your clips and settings are stored separately from the installed application
 and are kept when you update or uninstall Stillclip.
+
+Offline text recognition: original Ocrs pretrained models by Robert Knight,
+CC BY-SA 4.0. See models/OCR-NOTICE.txt, models/CC-BY-SA-4.0.txt and
+models/ocr-models.json for attribution, license and exact source/checksums.
+No model download occurs during use.

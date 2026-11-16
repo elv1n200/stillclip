@@ -1,20 +1,22 @@
 {
-  "author": "Robert Knight",
+  "author": "Robert Knight / Ocrs contributors",
   "license": "CC-BY-SA-4.0",
-  "source": "https://huggingface.co/robertknight/ocrs",
-  "revision": "df0edd170279ab971b53e094c627255a87e1a503",
+  "source": "https://github.com/robertknight/ocrs-models",
+  "license_source": "https://github.com/robertknight/ocrs-models/blob/a63bee16bf0c888e4ce7fe09ad124c83287444ee/LICENSE.md",
+  "distribution": "https://github.com/robertknight/ocrs/blob/548732120c391e9e48560aa73b670815a9064678/ocrs/examples/download-models.sh",
+  "pinned_by": "sha256",
   "models": [
     {
       "file": "text-detection.onnx",
-      "url": "https://huggingface.co/robertknight/ocrs/resolve/df0edd170279ab971b53e094c627255a87e1a503/text-detection-ssfbcj81.onnx",
-      "sha256": "c15df092060abe9417929b04eaf552b98946e15144036b3c83b09a3bf4d5d5a7",
-      "bytes": 2518158
+      "url": "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx",
+      "sha256": "a917b23dbd9524b465df7e922641b3ff2981623df4ded5a0234004ef2fee7cfe",
+      "bytes": 2499479
     },
     {
       "file": "text-recognition.onnx",
-      "url": "https://huggingface.co/robertknight/ocrs/resolve/df0edd170279ab971b53e094c627255a87e1a503/text-rec-checkpoint-s52qdbqt.onnx",
-      "sha256": "3774cdfe8ba082a17c181d5ab0698f3ff2fd0def07cd2b9134faec9b1a191919",
-      "bytes": 9713787
+      "url": "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.onnx",
+      "sha256": "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5",
+      "bytes": 9713177
     }
   ]
 }

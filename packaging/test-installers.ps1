@@ -29,8 +29,12 @@ $components = Get-Content $componentsPath -Raw
 try {
     New-NetFirewallRule -DisplayName $rule -Direction Outbound -Program $offline -Action Block | Out-Null
     Run-Checked $offline @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/LANG=en', "/LOG=`"$checks/offline-install.log`"")
-    foreach ($name in @('stillclip.exe', 'installed.flag', 'initial-language.txt', 'tools/ffmpeg.exe', 'tools/ffprobe.exe', 'unins000.exe')) {
+    foreach ($name in @('stillclip.exe', 'installed.flag', 'initial-language.txt', 'tools/ffmpeg.exe', 'tools/ffprobe.exe', 'models/text-detection.onnx', 'models/text-recognition.onnx', 'models/CC-BY-SA-4.0.txt', 'unins000.exe')) {
         if (!(Test-Path (Join-Path $install $name))) { throw "Missing installed file: $name" }
+    }
+    $modelManifest = Get-Content packaging/ocr-models.json -Raw | ConvertFrom-Json
+    foreach ($model in $modelManifest.models) {
+        if ((Get-FileHash (Join-Path $install "models/$($model.file)")).Hash -ne $model.sha256) { throw 'Installed OCR model checksum mismatch' }
     }
     if ((Get-Content (Join-Path $install 'initial-language.txt') -Raw).Trim() -ne 'en') { throw 'Initial installer language was not saved' }
     $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Stillclip/Stillclip.lnk'
