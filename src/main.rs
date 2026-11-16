@@ -21,6 +21,7 @@ mod media;
 mod overlay;
 mod platform;
 mod portrait;
+mod process_tree;
 mod recorder;
 mod screenshot;
 mod settings;
@@ -530,17 +531,17 @@ impl App {
             .cloned()
             .unwrap_or_else(|| {
                 let name = path.file_stem().unwrap_or_default().to_string_lossy();
-                let mut known = games::builtin_games();
-                known.extend(self.settings.custom_games.clone());
-                known.sort_by_key(|g| std::cmp::Reverse(g.name.len()));
-                let game = known
-                    .into_iter()
-                    .find(|g| {
-                        name.starts_with(&format!("{} ", g.name))
-                            || name.starts_with(&format!("{}_", g.name))
-                            || name.starts_with(&format!("{}-", g.name))
+                static BUILTIN: std::sync::OnceLock<Vec<GameEntry>> = std::sync::OnceLock::new();
+                let game = BUILTIN
+                    .get_or_init(games::builtin_games)
+                    .iter()
+                    .chain(&self.settings.custom_games)
+                    .filter(|g| {
+                        name.strip_prefix(g.name.as_str())
+                            .is_some_and(|tail| tail.starts_with([' ', '_', '-']))
                     })
-                    .map(|g| g.name)
+                    .max_by_key(|g| g.name.len())
+                    .map(|g| g.name.clone())
                     .unwrap_or_default();
                 library::Annotation {
                     game,
@@ -555,6 +556,7 @@ impl App {
 
     fn clip_json(&self, id: u64, clip: &Clip) -> Value {
         let entry = self.index.current(clip);
+        let annotation = self.annotation(&clip.path);
         json!({
             "id": id,
             "name": clip.name,
@@ -571,8 +573,8 @@ impl App {
             "markers": self.markers_of(&clip.path),
             "favorite": self.index.favorites.contains(&library::index_key(&clip.path)),
             "locked": self.clip_locked(&clip.path),
-            "game": self.annotation(&clip.path).game,
-            "tags": self.annotation(&clip.path).tags,
+            "game": annotation.game,
+            "tags": annotation.tags,
             "pending": entry.is_none(),
             "path": clip.path,
         })

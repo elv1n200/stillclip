@@ -91,12 +91,9 @@ impl Control {
         self.check()?;
         self.progress(0.0, phase);
         command.args(["-nostats", "-stats_period", "0.25", "-progress", "pipe:1"]);
-        let mut child = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let (mut child, group) = crate::process_tree::spawn(command)
             .map_err(|e| format!("FFmpeg konnte nicht gestartet werden: {e}"))?;
-        crate::capture::adopt_child(&child);
         let stdout = child.stdout.take().ok_or("FFmpeg-Fortschritt fehlt.")?;
         let stderr = child.stderr.take().ok_or("FFmpeg-Protokoll fehlt.")?;
         let meter = self.clone();
@@ -131,19 +128,21 @@ impl Control {
         });
         let result = loop {
             if self.cancelled() {
-                let _ = child.kill();
+                group.terminate(&mut child);
                 break child.wait();
             }
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) => std::thread::sleep(Duration::from_millis(40)),
                 Err(error) => {
-                    let _ = child.kill();
+                    group.terminate(&mut child);
                     let _ = child.wait();
                     break Err(error);
                 }
             }
         };
+        // Close the per-export job before joining readers: no detached child may keep a pipe open.
+        drop(group);
         let _ = reader.join();
         let stderr = errors.join().unwrap_or_default();
         self.check()?;
