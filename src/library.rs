@@ -274,6 +274,44 @@ pub struct Index {
     pub entries: HashMap<String, IndexEntry>,
     #[serde(default)]
     pub favorites: std::collections::HashSet<String>,
+    #[serde(default)]
+    pub annotations: HashMap<String, Annotation>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Annotation {
+    #[serde(default)]
+    pub game: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+impl Annotation {
+    pub fn normalized(game: &str, tags: &[String]) -> Result<Self, String> {
+        let game = game.trim();
+        if game.chars().count() > 80 || game.chars().any(char::is_control) {
+            return Err("Der Spielname darf höchstens 80 Zeichen enthalten.".into());
+        }
+        let mut unique = Vec::<String>::new();
+        for tag in tags.iter().map(|t| t.trim()).filter(|t| !t.is_empty()) {
+            if tag.chars().count() > 32 || tag.chars().any(char::is_control) || tag.contains(',') {
+                return Err("Tags dürfen höchstens 32 Zeichen und keine Kommas enthalten.".into());
+            }
+            if !unique
+                .iter()
+                .any(|t| t.to_lowercase() == tag.to_lowercase())
+            {
+                unique.push(tag.into());
+            }
+        }
+        if unique.len() > 12 {
+            return Err("Pro Clip sind höchstens 12 Tags möglich.".into());
+        }
+        Ok(Self {
+            game: game.into(),
+            tags: unique,
+        })
+    }
 }
 
 pub fn index_key(path: &Path) -> String {
@@ -292,10 +330,32 @@ impl Index {
     }
 
     pub fn save(&self, config_dir: &Path) {
-        if let Ok(bytes) = serde_json::to_vec(self) {
-            let _ = fs::create_dir_all(config_dir);
-            let _ = crate::settings::write_atomically(config_dir, "library-index.json", &bytes);
+        let _ = self.try_save(config_dir);
+    }
+
+    pub fn try_save(&self, config_dir: &Path) -> Result<(), String> {
+        let bytes = serde_json::to_vec(self).map_err(|e| e.to_string())?;
+        fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+        crate::settings::write_atomically(config_dir, "library-index.json", &bytes)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn annotate(
+        &mut self,
+        key: String,
+        value: Annotation,
+        config: &Path,
+    ) -> Result<(), String> {
+        let old = self.annotations.insert(key.clone(), value);
+        if let Err(error) = self.try_save(config) {
+            if let Some(value) = old {
+                self.annotations.insert(key, value);
+            } else {
+                self.annotations.remove(&key);
+            }
+            return Err(format!("Tags konnten nicht gespeichert werden: {error}"));
         }
+        Ok(())
     }
 
     /// The entry for a clip when it still matches the file on disk.
@@ -314,6 +374,7 @@ impl Index {
         let keep: std::collections::HashSet<String> =
             clips.iter().map(|c| index_key(&c.path)).collect();
         self.favorites.retain(|key| keep.contains(key));
+        self.annotations.retain(|key, _| keep.contains(key));
         let stale: Vec<String> = self
             .entries
             .keys()
@@ -349,6 +410,37 @@ pub fn thumbnail_name(clip: &Clip) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn annotations_normalize_persist_and_roll_back_on_write_failure() {
+        let dir = TestDir::new();
+        let value = Annotation::normalized(
+            " VALORANT ",
+            &[" Ace ".into(), "ace".into(), "Clutch".into(), " ".into()],
+        )
+        .unwrap();
+        assert_eq!(value.tags, ["Ace", "Clutch"]);
+        assert_eq!(value.game, "VALORANT");
+        assert!(Annotation::normalized("Game", &["x".repeat(33)]).is_err());
+        assert!(Annotation::normalized(
+            "Game",
+            &(0..13).map(|i| i.to_string()).collect::<Vec<_>>()
+        )
+        .is_err());
+        let mut index = Index::default();
+        index
+            .annotate("clip.mp4".into(), value.clone(), &dir.0)
+            .unwrap();
+        assert_eq!(Index::load(&dir.0).annotations["clip.mp4"], value);
+        let blocked = dir.0.join("file");
+        fs::write(&blocked, "blocked").unwrap();
+        assert!(index
+            .annotate("clip.mp4".into(), Annotation::default(), &blocked)
+            .is_err());
+        assert_eq!(index.annotations["clip.mp4"], value);
+        let old: Index = serde_json::from_str(r#"{"entries":{}}"#).unwrap();
+        assert!(old.annotations.is_empty());
+    }
 
     struct TestDir(PathBuf);
 

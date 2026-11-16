@@ -130,12 +130,12 @@ const fs = require('node:fs/promises');
     for (const [mode, limit] of [['discord_free', '20 MB'], ['discord_nitro', '1 GB']]) {
       await page.selectOption('#trim-mode', mode);
       assert.match(await page.locator('#trim-help').textContent(), new RegExp(limit));
-      assert.equal(await page.locator('#trim-label').textContent(), 'Für Discord speichern');
+      assert.equal(await page.locator('#trim-label').textContent(), 'Discord-Export einreihen');
       await page.click('#trim-clip');
       const message = await page.evaluate(() => window.messages.at(-1));
-      assert.deepEqual(message, { action: 'trim', id: 1, start: 0, end: 3, mode });
+      assert.deepEqual(message, { action: 'trim', id: 1, start: 0, end: 3, mode, crop: null });
     }
-    // Invalid selections and an ongoing export still block duplicate jobs.
+    // Invalid selections and ordinary file jobs block exports; queued exports do not lock the editor.
     await page.fill('#trim-end', '9');
     assert(await page.locator('#trim-clip').isDisabled());
     await page.fill('#trim-end', '3');
@@ -153,7 +153,7 @@ const fs = require('node:fs/promises');
     await page.selectOption('#highlight-mode', 'discord_nitro');
     await page.click('#highlight-export');
     assert.deepEqual(await page.evaluate(() => window.messages.at(-1)), {
-      action: 'highlights', mode: 'discord_nitro', pieces: [{ id: 1, start: 1, end: 3 }, { id: 1, start: 0, end: 3 }]
+      action: 'highlights', mode: 'discord_nitro', portrait_width: null, pieces: [{ id: 1, start: 1, end: 3, crop: null }, { id: 1, start: 0, end: 3, crop: null }]
     });
     await page.evaluate(() => window.setState({ busy: true }));
     assert(await page.locator('#highlight-export').isDisabled());
@@ -164,7 +164,39 @@ const fs = require('node:fs/promises');
     await page.click('#highlight-clear');
     assert(await page.locator('#highlight-export').isDisabled());
     await page.fill('#trim-start', '0');
+    // Crop is movable, keyboard adjustable, and saved independently per highlight piece.
+    await page.selectOption('#trim-mode', 'fast');
+    await page.selectOption('#crop-format', '720');
+    assert.equal(await page.inputValue('#trim-mode'), 'precise');
+    await page.locator('#crop-frame').scrollIntoViewIfNeeded();
+    const cropBox = await page.locator('#crop-frame').boundingBox();
+    assert(cropBox && Math.abs(cropBox.width / cropBox.height - 9 / 16) < 0.01);
+    await page.mouse.move(cropBox.x + cropBox.width / 2, cropBox.y + cropBox.height / 2);
+    await page.mouse.down(); await page.mouse.move(cropBox.x + cropBox.width / 2 + 60, cropBox.y + cropBox.height / 2); await page.mouse.up();
+    assert(Number(await page.inputValue('#crop-x')) > 50);
+    await page.locator('#crop-x').fill('100');
+    await page.locator('#crop-x').dispatchEvent('input');
+    await page.click('#trim-clip');
+    assert.deepEqual((await page.evaluate(() => window.messages.at(-1))).crop, { x: 1, y: 0.5, width: 720 });
+    await page.click('#highlight-add');
+    await page.selectOption('#highlight-format', '1080');
+    await page.click('#highlight-export');
+    const portrait = await page.evaluate(() => window.messages.at(-1));
+    assert.equal(portrait.portrait_width, 1080); assert.equal(portrait.pieces[0].crop.x, 1);
+    await page.fill('#clip-game', 'VALORANT'); await page.fill('#clip-tags', 'Ace, Clutch'); await page.click('#save-tags');
+    assert.deepEqual(await page.evaluate(() => window.messages.at(-1)), { action: 'annotate', id: 1, game: 'VALORANT', tags: ['Ace', ' Clutch'] });
+    // Queue remains operable without stealing focus when percent changes.
+    const jobs = [{ id: 8, label: 'Discord-Clip', running: true, percent: 35, phase: 'Kodieren', eta_seconds: 20, cancelling: false }, { id: 9, label: 'Nächster Clip', running: false, percent: 0, phase: 'Wartet', cancelling: false }];
+    await page.evaluate(({ jobs, clips }) => window.setState({ exports: jobs, clips: clips.map(c => ({ ...c, locked: true, game: 'VALORANT', tags: ['Ace', 'Clutch'] })) }), { jobs, clips: clipsFixture });
+    assert(await page.locator('#trim-clip').isEnabled()); assert(await page.locator('#editor-delete').isDisabled()); assert(await page.locator('#rename-clip').isDisabled());
+    await page.locator('#editor-export-list button').first().focus();
+    await page.evaluate(jobs => window.setState({ exports: jobs.map(j => ({ ...j, percent: j.percent + 1 })) }), jobs);
+    assert(await page.locator('#editor-export-list button').first().evaluate(el => el === document.activeElement));
+    await page.locator('#editor-export-list button').last().click();
+    assert.deepEqual(await page.evaluate(() => window.messages.at(-1)), { action: 'cancel_export', id: 9 });
+    if (shotDir) await page.screenshot({ path: path.join(shotDir, 'queue-editor.png'), animations: 'disabled' });
     await page.evaluate(() => { document.querySelector('.editor').scrollTop = 0; });
+
     if (shotDir) await page.screenshot({ path: path.join(shotDir, 'editor-1280.png'), animations: 'disabled' });
     await page.locator('#trim-mode').scrollIntoViewIfNeeded();
     if (shotDir) await page.screenshot({ path: path.join(shotDir, 'discord-export-1280.png'), animations: 'disabled' });
@@ -174,7 +206,28 @@ const fs = require('node:fs/promises');
       return box.left >= 0 && box.right <= innerWidth;
     }), 'Editor must fit the minimum window size');
     await page.click('#close-editor');
+    await page.locator('.library-filters summary').click();
+    await page.fill('#search', 'Clutch'); assert.equal(await page.locator('.clip-card').count(), 1);
+    await page.selectOption('#filter-game', 'VALORANT'); await page.selectOption('#filter-tag', 'ace');
+    await page.fill('#filter-from', '2026-11-16'); await page.locator('#filter-from').dispatchEvent('change');
+    assert.equal(await page.locator('.clip-card').count(), 1);
+    await page.fill('#filter-to', '2026-11-15'); await page.locator('#filter-to').dispatchEvent('change');
+    assert.equal(await page.locator('.clip-card').count(), 0);
+    await page.click('#reset-filters'); await page.selectOption('#filter-length', 'long'); assert.equal(await page.locator('.clip-card').count(), 0);
+    await page.selectOption('#filter-length', 'short'); assert.equal(await page.locator('.clip-card').count(), 1);
+    // Native drag IPC is issued only after a held left pointer crosses the threshold.
+    await page.locator('.card-drag').scrollIntoViewIfNeeded();
+    const dragBox = await page.locator('.card-drag').boundingBox();
+    await page.mouse.move(dragBox.x + 5, dragBox.y + 5); await page.mouse.down(); await page.mouse.move(dragBox.x + 30, dragBox.y + 5); await page.mouse.up();
+    assert((await page.evaluate(() => window.messages)).some(m => m.action === 'drag_clip' && m.id === 1));
+    await page.click('#nav-settings'); await page.locator('#audio-test-start').scrollIntoViewIfNeeded(); await page.click('#audio-test-start');
+    assert.equal((await page.evaluate(() => window.messages.at(-1))).action, 'audio_test');
+    await page.evaluate(() => window.setState({ audio_test: { running: true, percent: 30, phase: 'Audio-Test läuft', levels: [['Mikrofon', 1.2], ['Spielton', 0]], src: null } }));
+    assert(await page.locator('#audio-test-start').isDisabled()); assert.match(await page.locator('#audio-levels').textContent(), /Übersteuert.*Stille/);
+    await page.click('#audio-test-cancel'); assert.equal((await page.evaluate(() => window.messages.at(-1))).action, 'cancel_audio_test');
+    await page.evaluate(() => window.setState({ audio_test: { running: false, levels: [], src: 'http://clip.localhost/audio-test/1' } }));
+    assert(await page.locator('#audio-preview').isVisible());
     assert.deepEqual(errors, []);
-    console.log('UI checks passed: recording during export, settings locks, game profiles, capture/audio selection, diagnostics, favorites, highlight ordering/export, 1280/720px layout and real video playback.');
+    console.log('UI checks passed: recording, profiles, favorites, tags/filters, queue progress/cancellation, audio test, native drag IPC, portrait crops/highlights, 1280/720px layout and video playback.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

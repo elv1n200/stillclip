@@ -29,3 +29,28 @@ Favoriten lassen sich unabhängig davon mit einem kleinen Testordner prüfen:
 alte Clips als Favorit markieren, ein Ordnerlimit setzen und neu einlesen.
 Favoriten müssen bleiben; andere alte Clips dürfen gemäß aktivierter Löschoption
 entfernt werden. Einen Favoriten umbenennen und die App neu starten.
+
+7. Vor dem Aufnehmen im Tonbereich den Audio-Test starten. Systemton und Mikrofon
+   getrennt und gemeinsam testen, stummschalten sowie die Lautstärke ändern.
+   Pegel müssen auf die jeweilige Quelle reagieren; den zehnsekündigen Mix anhören.
+   Abbrechen und Abziehen des Geräts dürfen die Bedienung nicht blockieren.
+8. Drei Exporte einreihen, währenddessen einen weiteren Clip öffnen. Den zweiten
+   wartenden Auftrag entfernen und den aktiven abbrechen. Die anderen Aufträge
+   müssen weiterlaufen; keine unfertige MP4 darf in der Bibliothek erscheinen.
+   Währenddessen eine Aufnahme stoppen und Markierungen setzen. Schließen in
+   den Infobereich lässt Exporte laufen; „Beenden“ bricht offene Exporte ab.
+9. Einen Clip am Feld „Ziehen“ nach Discord ziehen. Die Datei muss als Anhang im
+   Entwurf erscheinen; noch nicht absenden. Auch Unicode-Dateinamen, Escape zum
+   Abbrechen und einen Datei-Explorer als Ziel prüfen. Beide Apps sollten mit
+   derselben Windows-Berechtigungsstufe laufen.
+10. Spiel und Tags speichern, App neu starten und Clip umbenennen. Angaben und
+    Favoriten müssen erhalten bleiben. Datum und Länge kombiniert filtern.
+11. Hochkantformat wählen, den Rahmen nach links und rechts verschieben und
+    jeweils exportieren. Bildausschnitt und Auflösung prüfen, auch für Highlights
+    aus mehreren Clips und beide Discord-Profile. Bei kleineren Dateilimits ist
+    eine reduzierte Auflösung vorgesehen.
+
+Die automatischen Tests prüfen zusätzlich Queue-Zustände, Abbruch eines echten
+FFmpeg-Prozesses, Hochkantauflösung und Bildinhalt mit synthetischen Farbflächen,
+Tagspeicherung, Pegelberechnung und das Windows-Dateiobjekt für Drag-and-drop.
+Sie ersetzen keine Aufnahme mit realen Geräten oder das Ablegen in Discord.

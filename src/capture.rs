@@ -73,16 +73,6 @@ pub fn adopt_child(child: &std::process::Child) {
     let _ = child;
 }
 
-/// Export helpers must stop with the app too, including long highlight jobs.
-pub fn run_output(mut command: Command) -> std::io::Result<std::process::Output> {
-    let child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    adopt_child(&child);
-    child.wait_with_output()
-}
-
 /// A monitor attached to the desktop.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Display {

@@ -442,3 +442,37 @@ select:focus { border-color: #969696; }
 .highlight-piece > span { flex: 1; min-width: 140px; overflow-wrap: anywhere; font-size: 12px; }
 .highlight-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 #highlight-summary { font-size: 12px; width: 100%; color: var(--muted); }
+
+/* Tools share the terminal's square borders and restrained accent color. */
+.library-filters, .export-queue, .audio-test { border: 1px solid #555; padding: 14px; margin: 14px 0; }
+.library-filters summary { cursor: pointer; color: #ccc; }
+.filter-fields, .annotation-panel, .crop-controls, #crop-position { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.filter-fields { margin-top: 14px; }
+.filter-fields label, .annotation-panel label, .crop-controls label { display: grid; gap: 6px; font-size: 12px; min-width: 0; }
+.filter-fields select, .filter-fields input { max-width: 190px; }
+.annotation-panel { border-top: 1px solid #444; padding-top: 16px; }
+.annotation-panel label { flex: 1; min-width: 150px; }
+.annotation-panel p, .crop-controls p { width: 100%; margin: 0; }
+.annotation-panel input { width: 100%; }
+.crop-controls { margin-bottom: 14px; }
+#crop-position input { width: 130px; accent-color: #dc9ab5; }
+.video-wrap { position: relative; flex-shrink: 0; overflow: hidden; }
+.editor video { object-fit: contain; }
+#crop-frame { position: absolute; border: 2px solid #f6b0d2; box-shadow: 0 0 0 2000px #0008; touch-action: none; cursor: move; user-select: none; }
+#crop-frame span { position: absolute; top: 4px; left: 4px; font-size: 10px; background: #141414; padding: 3px; color: #ffd6e9; pointer-events: none; white-space: nowrap; }
+.export-queue h2, .export-queue h3, .audio-test h3 { margin: 0 0 10px; font-size: 14px; }
+.export-queue ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.export-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; border-top: 1px solid #393939; padding-top: 10px; }
+.export-item strong { font-size: 12px; overflow-wrap: anywhere; }
+.export-item small { color: #aaa; grid-column: 1; }
+.export-item progress { width: 100%; height: 8px; accent-color: #dc9ab5; grid-column: 1; }
+.export-item button { grid-column: 2; grid-row: 1 / 4; align-self: center; }
+.card-drag { position: absolute; z-index: 2; left: 48px; top: 8px; padding: 6px 8px; border: 1px solid #777; background: #141414e8; color: #ddd; font: inherit; font-size: 11px; cursor: grab; touch-action: none; user-select: none; }
+.card-drag:active { cursor: grabbing; }
+.clip-tags { color: #d9a0b8; font-size: 11px; overflow-wrap: anywhere; margin-top: 7px; }
+.audio-level { display: grid; grid-template-columns: 85px minmax(60px, 1fr) 90px; align-items: center; gap: 10px; margin: 8px 0; font-size: 12px; }
+.audio-level meter { width: 100%; height: 18px; }
+.audio-test audio { width: 100%; margin-top: 10px; }
+.audio-test .is-error { color: #ffaaaa; }
+[hidden] { display: none !important; }
+@media (max-width: 760px) { .filter-fields label { flex: 1 1 140px; } .filter-fields input, .filter-fields select { max-width: 100%; width: 100%; } .annotation-panel label { flex-basis: 100%; } }

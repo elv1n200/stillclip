@@ -8,6 +8,7 @@ use std::{
 
 pub const MAX_PIECES: usize = 20;
 pub struct Piece {
+    pub crop: Option<crate::portrait::Crop>,
     pub path: PathBuf,
     pub start: f64,
     pub end: f64,
@@ -20,6 +21,28 @@ pub fn export(
     output: &Path,
     profile: Option<discord::Profile>,
 ) -> Result<Vec<f64>, String> {
+    export_controlled(
+        ffmpeg,
+        pieces,
+        output,
+        profile,
+        None,
+        &crate::jobs::Control::new(),
+    )
+}
+
+pub fn export_controlled(
+    ffmpeg: &Path,
+    pieces: &[Piece],
+    output: &Path,
+    profile: Option<discord::Profile>,
+    portrait_width: Option<u32>,
+    control: &crate::jobs::Control,
+) -> Result<Vec<f64>, String> {
+    control.check()?;
+    if portrait_width.is_some_and(|w| ![720, 1080].contains(&w)) {
+        return Err("Ungültiges Hochkantformat.".into());
+    }
     if pieces.is_empty() || pieces.len() > MAX_PIECES {
         return Err(format!(
             "Wähle zwischen einem und {MAX_PIECES} Ausschnitten."
@@ -32,6 +55,10 @@ pub fn export(
     let ranges: Vec<_> = pieces
         .iter()
         .map(|piece| {
+            control.check()?;
+            if let Some(crop) = piece.crop {
+                crop.validate()?;
+            }
             let info = recorder::probe_media(ffmpeg, &piece.path)?;
             let (start, end) = mechanics::editor_range(piece.start, piece.end, info.duration)
                 .ok_or("Ein Highlight-Ausschnitt ist ungültig oder zu kurz.")?;
@@ -47,6 +74,7 @@ pub fn export(
     let mut markers = Vec::new();
     let mut offset = 0.0;
     for (index, (piece, (start, end, audio))) in pieces.iter().zip(&ranges).enumerate() {
+        control.check()?;
         let name = format!("part-{index:02}.mp4");
         let part = workspace.dir.join(&name);
         let mut encode = command(ffmpeg);
@@ -58,16 +86,69 @@ pub fn export(
         if !audio {
             encode.args(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]);
         }
-        encode.arg("-t").arg(format!("{:.6}", end - start))
-            .args(["-map", "0:v:0", "-map", if *audio { "0:a:0" } else { "1:a:0" },
-                "-map_metadata", "-1", "-map_chapters", "-1", "-filter_threads", "2",
-                "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=60,setpts=PTS-STARTPTS",
-                "-af", "aresample=48000,asetpts=PTS-STARTPTS,apad", "-c:v", "libx264",
-                "-preset", "veryfast", "-crf", "20", "-threads", "4", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-video_track_timescale", "90000"])
+        let filter = if let Some(width) = portrait_width {
+            let crop = crate::portrait::Crop {
+                width,
+                ..piece.crop.unwrap_or(crate::portrait::Crop {
+                    x: 0.5,
+                    y: 0.5,
+                    width,
+                })
+            };
+            format!("{},fps=60,setpts=PTS-STARTPTS", crop.filter())
+        } else {
+            "scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=60,setpts=PTS-STARTPTS".into()
+        };
+        encode
+            .arg("-t")
+            .arg(format!("{:.6}", end - start))
+            .args([
+                "-map",
+                "0:v:0",
+                "-map",
+                if *audio { "0:a:0" } else { "1:a:0" },
+                "-map_metadata",
+                "-1",
+                "-map_chapters",
+                "-1",
+                "-filter_threads",
+                "2",
+                "-vf",
+                &filter,
+                "-af",
+                "aresample=48000,asetpts=PTS-STARTPTS,apad",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "20",
+                "-threads",
+                "4",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "160k",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-video_track_timescale",
+                "90000",
+            ])
             .arg(&part);
-        let result =
-            crate::capture::run_output(encode).map_err(|e| format!("Highlight-Export: {e}"))?;
+        let result = control
+            .part(
+                index as f64 / pieces.len() as f64 * 0.8,
+                0.8 / pieces.len() as f64,
+            )
+            .run(
+                &mut encode,
+                end - start,
+                &format!("Ausschnitt {} / {}", index + 1, pieces.len()),
+            )?;
         if !result.status.success() {
             return Err(format!(
                 "Ausschnitt {} konnte nicht exportiert werden: {}",
@@ -93,33 +174,34 @@ pub fn export(
     let list = workspace.dir.join("parts.txt");
     fs::write(&list, concat).map_err(|e| format!("Highlight-Liste: {e}"))?;
     let joined = workspace.dir.join("highlight.mp4");
-    let result = command(ffmpeg)
-        .args([
-            "-hide_banner",
-            "-v",
-            "error",
-            "-nostdin",
-            "-n",
-            "-f",
-            "concat",
-            "-safe",
-            "1",
-            "-i",
-        ])
-        .arg(&list)
-        .args([
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a:0",
-            "-c",
-            "copy",
-            "-movflags",
-            "+faststart",
-        ])
-        .arg(&joined)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut join = command(ffmpeg);
+    join.args([
+        "-hide_banner",
+        "-v",
+        "error",
+        "-nostdin",
+        "-n",
+        "-f",
+        "concat",
+        "-safe",
+        "1",
+        "-i",
+    ])
+    .arg(&list)
+    .args([
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0",
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+    ])
+    .arg(&joined);
+    let result = control
+        .part(0.8, 0.05)
+        .run(&mut join, offset, "Ausschnitte verbinden")?;
     if !result.status.success() {
         return Err(format!(
             "Highlights konnten nicht verbunden werden: {}",
@@ -132,11 +214,21 @@ pub fn export(
     }
     let staged = if let Some(profile) = profile {
         let compressed = workspace.dir.join("discord-highlight.mp4");
-        discord::export_clip(ffmpeg, &joined, &compressed, 0.0, duration, profile)?;
+        discord::export_controlled(
+            ffmpeg,
+            &joined,
+            &compressed,
+            0.0,
+            duration,
+            profile,
+            None,
+            &control.part(0.85, 0.14),
+        )?;
         compressed
     } else {
         joined
     };
+    control.check()?;
     workspace.publish(&staged, output)?;
     Ok(markers)
 }
@@ -185,6 +277,7 @@ mod tests {
                 recorder::diagnostic(&result.stderr)
             );
             pieces.push(Piece {
+                crop: None,
                 path: source,
                 start: 0.5,
                 end: 2.5,

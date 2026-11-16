@@ -1562,6 +1562,35 @@ pub fn trim_clip(
     end: f64,
     mode: TrimMode,
 ) -> Result<f64, String> {
+    trim_controlled(
+        ffmpeg,
+        input,
+        output,
+        start,
+        end,
+        mode,
+        None,
+        &crate::jobs::Control::new(),
+    )
+}
+
+pub fn trim_controlled(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    start: f64,
+    end: f64,
+    mode: TrimMode,
+    crop: Option<crate::portrait::Crop>,
+    control: &crate::jobs::Control,
+) -> Result<f64, String> {
+    control.check()?;
+    let crop = crop.map(|c| c.validate()).transpose()?;
+    let mode = if crop.is_some() {
+        TrimMode::Precise
+    } else {
+        mode
+    };
     if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
         return Err("Wähle einen gültigen Clipbereich mit Ende nach dem Anfang.".into());
     }
@@ -1587,7 +1616,19 @@ pub fn trim_clip(
     drop(destination);
     let length = end.min(duration) - start;
     let mut export = command(ffmpeg);
-    export.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"]);
+    let filter = crop.map_or_else(
+        || "scale=trunc(iw/2)*2:trunc(ih/2)*2".to_string(),
+        |c| c.filter(),
+    );
+    export.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-filter_threads",
+        "2",
+    ]);
     match mode {
         TrimMode::Precise => {
             export
@@ -1598,24 +1639,9 @@ pub fn trim_clip(
                 .arg("-t")
                 .arg(format!("{length:.6}"))
                 .args([
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    "0:a?",
-                    "-vf",
-                    "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "veryfast",
-                    "-crf",
-                    "20",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "160k",
+                    "-map", "0:v:0", "-map", "0:a?", "-vf", &filter, "-c:v", "libx264", "-preset",
+                    "veryfast", "-threads", "4", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a",
+                    "aac", "-b:a", "160k",
                 ]);
         }
         TrimMode::Fast => {
@@ -1638,13 +1664,14 @@ pub fn trim_clip(
                 ]);
         }
     }
-    let result = export
+    export
         .args(["-movflags", "+faststart", "-f", "mp4"])
-        .arg(output)
-        .output()
+        .arg(output);
+    let result = control
+        .run(&mut export, length, "Clip kodieren")
         .map_err(|error| {
             let _ = fs::remove_file(output);
-            format!("Der Clip konnte nicht exportiert werden: {error}")
+            error
         })?;
     if !result.status.success() {
         let _ = fs::remove_file(output);

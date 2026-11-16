@@ -20,6 +20,7 @@
     game_profiles: [], capture_window: false, game_audio: false, target_exe: '',
   };
   let state = {
+    exports: [], export_limit: 12, audio_test: {}, dragging: false,
     clips: [], recording: false, elapsed: 0, busy: false, capture_busy: false, status: '', error: false,
     ffmpeg_available: false, ffmpeg_path: null, clips_dir: '', settings: { ...defaultSettings }, autostart: false,
     displays: [], microphones: [], default_output: null,
@@ -235,7 +236,26 @@
     if (clip.width && clip.height) details.push(`${clip.width}×${clip.height}`);
     meta.append(el('span', '', details.join(' · ')), el('span', '', dateLabel(clip.created)));
     info.append(meta);
-    card.append(thumbnail, favorite, menu, info);
+    const annotations = [clip.game, ...(clip.tags || []).map(t => '#' + t)].filter(Boolean);
+    if (annotations.length) info.append(el('div', 'clip-tags', annotations.join(' · ')));
+    const drag = el('button', 'card-drag', '↗ Ziehen');
+    drag.title = 'Gedrückt halten und die Datei nach Discord oder in einen Ordner ziehen';
+    drag.setAttribute('aria-label', 'Clip als Datei ziehen');
+    drag.disabled = state.busy || state.dragging;
+    let origin = null;
+    drag.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || drag.disabled) return;
+      event.stopPropagation(); event.preventDefault(); origin = { x: event.clientX, y: event.clientY };
+      drag.setPointerCapture(event.pointerId);
+    });
+    drag.addEventListener('pointermove', event => {
+      if (!origin || !(event.buttons & 1) || Math.hypot(event.clientX - origin.x, event.clientY - origin.y) < 6) return;
+      origin = null; drag.releasePointerCapture(event.pointerId); ipc('drag_clip', { id: clip.id });
+    });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) drag.addEventListener(type, () => { origin = null; });
+    drag.addEventListener('click', event => { event.stopPropagation(); toast('Datei am Ziehen-Feld gedrückt halten und nach Discord ziehen. Alternativ: im Explorer anzeigen.'); });
+    drag.addEventListener('keydown', event => event.stopPropagation());
+    card.append(thumbnail, favorite, menu, drag, info);
     card.addEventListener('click', () => openEditor(clip));
     card.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openEditor(clip); }
@@ -245,9 +265,44 @@
     return card;
   }
 
+  function updateFilterOptions() {
+    for (const [id, values, label] of [
+      ['filter-game', [...new Set(state.clips.map(c => c.game).filter(Boolean))], 'Alle Spiele'],
+      ['filter-tag', [...new Set(state.clips.flatMap(c => c.tags || []).map(t => t.toLowerCase()))], 'Alle Tags'],
+    ]) {
+      const input = $(id), before = input.value;
+      if (before && !values.includes(before)) values.push(before);
+      values.sort((a,b) => a.localeCompare(b, 'de'));
+      const signature = JSON.stringify(values);
+      if (input.dataset.values === signature) continue;
+      input.dataset.values = signature;
+      input.replaceChildren(new Option(label, ''), ...values.map(v => new Option(v, v))); input.value = before;
+    }
+  }
+  function resetFilters() {
+    for (const id of ['search', 'filter-game', 'filter-tag', 'filter-from', 'filter-to', 'filter-length']) $(id).value = '';
+    $('favorites-only').checked = false; renderLibrary();
+  }
+  for (const id of ['filter-game', 'filter-tag', 'filter-from', 'filter-to', 'filter-length']) $(id).addEventListener('change', renderLibrary);
+  $('reset-filters').addEventListener('click', resetFilters);
+
   function renderLibrary() {
     const query = $('search').value.trim().toLocaleLowerCase('de-DE');
-    const clips = state.clips.filter(clip => String(clip.name).toLocaleLowerCase('de-DE').includes(query) && (!$('favorites-only').checked || clip.favorite));
+    updateFilterOptions();
+    const from = $('filter-from').value ? new Date($('filter-from').value + 'T00:00:00').getTime() / 1000 : -Infinity;
+    const until = $('filter-to').value ? new Date($('filter-to').value + 'T00:00:00') : null;
+    if (until) until.setDate(until.getDate() + 1);
+    const to = until ? until.getTime() / 1000 : Infinity;
+    const clips = state.clips.filter(clip => {
+      if (![clip.name, clip.game, ...(clip.tags || [])].filter(Boolean).join(' ').toLocaleLowerCase('de-DE').includes(query)) return false;
+      if ($('favorites-only').checked && !clip.favorite) return false;
+      if ($('filter-game').value && clip.game !== $('filter-game').value) return false;
+      if ($('filter-tag').value && !(clip.tags || []).some(t => t.toLowerCase() === $('filter-tag').value)) return false;
+      if ((from !== -Infinity || to !== Infinity) && (!Number.isFinite(clip.created) || clip.created < from || clip.created >= to)) return false;
+      const length = $('filter-length').value;
+      if (length && (!Number.isFinite(clip.duration) || (length === 'short' ? clip.duration >= 30 : length === 'medium' ? clip.duration < 30 || clip.duration > 120 : clip.duration <= 120))) return false;
+      return true;
+    });
     const order = $('sort').value;
     clips.sort((a, b) => {
       if (order === 'name') return String(a.name).localeCompare(String(b.name), 'de');
@@ -267,7 +322,7 @@
   $('search').addEventListener('input', renderLibrary);
   $('sort').addEventListener('change', renderLibrary);
   $('favorites-only').addEventListener('change', renderLibrary);
-  $('reset-search').addEventListener('click', () => { $('search').value = ''; renderLibrary(); $('search').focus(); });
+  $('reset-search').addEventListener('click', () => { resetFilters(); $('search').focus(); });
 
   // ---------------------------------------------------------- context menu
   function openMenu(clip, x, y) {
@@ -295,6 +350,7 @@
 
   // --------------------------------------------------------------- confirm
   function confirmDelete(clip) {
+    if (state.clips.find(c => c.id === clip.id)?.locked) { toast('Dieser Clip wird gerade verwendet. Beende zuerst den Export oder das Ziehen.'); return; }
     pendingDelete = clip;
     $('confirm-text').textContent = `„${clip.name}“ wird in den Papierkorb verschoben. Du kannst den Clip von dort wiederherstellen.`;
     $('confirm-backdrop').hidden = false;
@@ -827,7 +883,9 @@
     if (state.busy && !expectReopen) return;
     expectReopen = false;
     previousFocus = document.activeElement;
-    selected = { id: clip.id, src: clip.src, name: clip.name, path: clip.path };
+    selected = { id: clip.id, src: clip.src, name: clip.name, path: clip.path, width: clip.width, height: clip.height };
+    $('clip-game').value = clip.game || ''; $('clip-tags').value = (clip.tags || []).join(', ');
+    $('crop-format').value = 'original'; $('crop-x').value = '50'; $('crop-y').value = '50';
     clipMarks = (clip.markers || []).filter(Number.isFinite).sort((a, b) => a - b);
     duration = Number(clip.duration) || 0;
     sel = { start: 0, end: duration };
@@ -919,6 +977,7 @@
     if (document.activeElement !== $('trim-start')) $('trim-start').value = sel.start.toFixed(2);
     if (document.activeElement !== $('trim-end')) $('trim-end').value = duration || sel.end ? sel.end.toFixed(2) : '';
     $('play-icon').replaceChildren((() => { const use = document.createElementNS('http://www.w3.org/2000/svg', 'use'); use.setAttribute('href', video.paused ? '#i-play' : '#i-pause'); return use; })());
+    renderCrop();
     validateTrim();
   }
   function validateTrim() {
@@ -927,12 +986,15 @@
     const minimum = minSelection();
     const valid = hasValues && Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start
       && end - start + state.editor_tolerance >= minimum && (!duration || end <= duration + state.editor_tolerance);
-    $('trim-clip').disabled = !loaded || state.busy || !state.ffmpeg_available || !selected || !valid;
+    $('trim-clip').disabled = !loaded || state.busy || !state.ffmpeg_available || !selected || !valid || state.exports.length >= state.export_limit;
     const invalid = hasValues && !valid;
     $('trim-help').classList.toggle('error', invalid);
+    const crop = currentCrop();
+    $('trim-mode').querySelector('[value="fast"]').disabled = !!crop;
+    if (crop && $('trim-mode').value === 'fast') $('trim-mode').value = 'precise';
     const mode = $('trim-mode').value;
     const discordLimit = mode === 'discord_free' ? '20 MB' : mode === 'discord_nitro' ? '1 GB' : null;
-    $('trim-label').textContent = discordLimit ? 'Für Discord speichern' : 'Als neuen Clip speichern';
+    $('trim-label').textContent = discordLimit ? 'Discord-Export einreihen' : 'Export einreihen';
     $('trim-help').textContent = invalid
       ? (duration && end > duration + state.editor_tolerance ? 'Das Ende muss innerhalb der Videolänge liegen.' : duration && duration < state.editor_min_seconds ? 'Dieses kurze Video wird vollständig übernommen.' : 'Der Ausschnitt muss mindestens zwei Sekunden lang sein.')
       : !state.ffmpeg_available ? 'Wähle FFmpeg in den Einstellungen aus, um Clips zuzuschneiden.'
@@ -972,19 +1034,20 @@
     $('highlight-summary').textContent = missing ? 'Ein Quellclip fehlt. Entferne den betroffenen Ausschnitt.'
       : total > 1800 ? 'Bitte auf höchstens 30 Minuten kürzen.'
         : highlightPieces.length ? `${highlightPieces.length} Ausschnitte · ${short(total)}` : 'Noch keine Ausschnitte.';
-    $('highlight-export').disabled = !loaded || state.busy || !state.ffmpeg_available || !highlightPieces.length || missing || total > 1800;
+    $('highlight-export').disabled = !loaded || state.busy || !state.ffmpeg_available || !highlightPieces.length || missing || total > 1800 || state.exports.length >= state.export_limit;
     $('highlight-clear').disabled = state.busy || !highlightPieces.length;
     $('highlight-mode').disabled = state.busy;
+    $('highlight-format').disabled = state.busy;
   }
   $('highlight-add').addEventListener('click', () => {
     if (!$('highlight-add').disabled && selected) {
-      highlightPieces.push({ id: selected.id, name: selected.name, start: Number($('trim-start').value), end: Number($('trim-end').value) });
+      highlightPieces.push({ id: selected.id, name: selected.name, start: Number($('trim-start').value), end: Number($('trim-end').value), crop: currentCrop() });
       renderHighlights();
     }
   });
   $('highlight-clear').addEventListener('click', () => { highlightPieces.length = 0; renderHighlights(); });
   $('highlight-export').addEventListener('click', () => {
-    if (!$('highlight-export').disabled) ipc('highlights', { pieces: highlightPieces.map(({ id, start, end }) => ({ id, start, end })), mode: $('highlight-mode').value });
+    if (!$('highlight-export').disabled) ipc('highlights', { pieces: highlightPieces.map(({ id, start, end, crop }) => ({ id, start, end, crop })), mode: $('highlight-mode').value, portrait_width: $('highlight-format').value === 'original' ? null : Number($('highlight-format').value) });
   });
 
   // timeline interaction
@@ -1075,7 +1138,7 @@
   });
   $('trim-clip').addEventListener('click', () => {
     validateTrim();
-    if (selected && !$('trim-clip').disabled) ipc('trim', { id: selected.id, start: Number($('trim-start').value), end: Number($('trim-end').value), mode: $('trim-mode').value });
+    if (selected && !$('trim-clip').disabled) ipc('trim', { id: selected.id, start: Number($('trim-start').value), end: Number($('trim-end').value), mode: $('trim-mode').value, crop: currentCrop() });
   });
   $('editor-reveal').addEventListener('click', () => { if (selected) ipc('reveal', { id: selected.id }); });
   $('editor-external').addEventListener('click', () => { if (selected) ipc('open_clip', { id: selected.id }); });
@@ -1118,9 +1181,11 @@
     const unavailable = !loaded || state.busy;
     document.querySelectorAll('[data-action]').forEach(button => {
       const action = button.dataset.action;
-      button.disabled = unavailable || (state.recording && ['choose_folder', 'choose_ffmpeg'].includes(action));
+      button.disabled = unavailable || ((state.recording || state.exports.length || state.audio_test.running || state.dragging) && ['choose_folder', 'choose_ffmpeg'].includes(action));
     });
     renderRecordCard();
+    renderQueue(); renderAudioTest();
+    if (state.audio_test.running && !state.recording) $('record-button').disabled = true;
     $('setup-banner').hidden = !loaded || state.ffmpeg_available;
     ['app-status', 'editor-status'].forEach(id => {
       const status = $(id);
@@ -1130,6 +1195,9 @@
     });
     $('rename-clip').disabled = unavailable || !selected || !$('clip-name').value.trim();
     ['clip-name', 'trim-start', 'trim-end', 'trim-mode', 'editor-delete'].forEach(id => { $(id).disabled = unavailable; });
+    const locked = selected && state.clips.find(c => c.id === selected.id)?.locked;
+    if (locked) { $('rename-clip').disabled = true; $('editor-delete').disabled = true; }
+    for (const id of ['clip-game', 'clip-tags', 'save-tags', 'crop-format', 'crop-x', 'crop-y', 'crop-center']) $(id).disabled = unavailable;
     $('version').textContent = state.version ? `Stillclip ${state.version}` : '';
     validateTrim();
   }
@@ -1156,7 +1224,7 @@
     state = { ...state, ...next, clips: Array.isArray(next.clips) ? next.clips : state.clips, settings: { ...defaultSettings, ...(next.settings || state.settings) } };
     loaded = true;
     if (draft) draft.custom_games = state.settings.custom_games;
-    const signature = JSON.stringify(state.clips);
+    const signature = JSON.stringify([state.clips, state.busy, state.dragging]);
     if (signature !== clipSignature) { clipSignature = signature; renderLibrary(); }
     if (selected) {
       const clip = state.clips.find(c => c.id === selected.id);
@@ -1209,6 +1277,99 @@
     if (name === 'settings') ipc('list_apps');
     if (anchor) setTimeout(() => { const target = $(anchor); if (target) target.scrollIntoView({ block: 'center' }); }, 150);
   };
+
+  function currentCrop() {
+    if ($('crop-format').value === 'original') return null;
+    return { width: Number($('crop-format').value), x: Number($('crop-x').value) / 100, y: Number($('crop-y').value) / 100 };
+  }
+  function cropGeometry() {
+    const w = video.videoWidth || selected?.width, h = video.videoHeight || selected?.height;
+    if (!w || !h) return null;
+    const box = video.getBoundingClientRect(), scale = Math.min(box.width / w, box.height / h);
+    const width = w * scale, height = h * scale;
+    const cropWidth = Math.min(width, height * 9 / 16), cropHeight = Math.min(height, width * 16 / 9);
+    return { left: (box.width - width) / 2, top: (box.height - height) / 2, dx: width - cropWidth, dy: height - cropHeight, width: cropWidth, height: cropHeight };
+  }
+  function renderCrop() {
+    const crop = currentCrop(), geometry = cropGeometry();
+    $('crop-position').hidden = !crop; $('crop-help').hidden = !crop;
+    const frame = $('crop-frame'); frame.hidden = !crop || !geometry || !selected;
+    if (frame.hidden) return;
+    frame.style.left = geometry.left + geometry.dx * crop.x + 'px'; frame.style.top = geometry.top + geometry.dy * crop.y + 'px';
+    frame.style.width = geometry.width + 'px'; frame.style.height = geometry.height + 'px';
+    $('crop-x').disabled = geometry.dx < 1; $('crop-y').disabled = geometry.dy < 1;
+  }
+  $('crop-format').addEventListener('change', () => { renderCrop(); validateTrim(); });
+  for (const id of ['crop-x', 'crop-y']) $(id).addEventListener('input', renderCrop);
+  $('crop-center').addEventListener('click', () => { $('crop-x').value = '50'; $('crop-y').value = '50'; renderCrop(); });
+  new ResizeObserver(renderCrop).observe(video);
+  let cropDrag = null;
+  $('crop-frame').addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    event.preventDefault(); event.stopPropagation();
+    cropDrag = { x: event.clientX, y: event.clientY, crop: currentCrop(), geometry: cropGeometry() };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  });
+  $('crop-frame').addEventListener('pointermove', event => {
+    if (!cropDrag?.geometry) return;
+    const { x, y, crop, geometry } = cropDrag;
+    if (geometry.dx > 1) $('crop-x').value = String(clamp(crop.x + (event.clientX - x) / geometry.dx, 0, 1) * 100);
+    if (geometry.dy > 1) $('crop-y').value = String(clamp(crop.y + (event.clientY - y) / geometry.dy, 0, 1) * 100);
+    renderCrop();
+  });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) $('crop-frame').addEventListener(type, () => { cropDrag = null; });
+  $('save-tags').addEventListener('click', () => {
+    if (selected) ipc('annotate', { id: selected.id, game: $('clip-game').value, tags: $('clip-tags').value.split(',') });
+  });
+
+  // Keep queue rows in place while progress changes, including keyboard focus.
+  function renderQueue() {
+    for (const prefix of ['', 'editor-']) {
+      $(prefix + 'export-queue').hidden = !state.exports.length;
+      $(prefix + 'export-count').textContent = `${state.exports.length}/${state.export_limit}`;
+      const list = $(prefix + 'export-list');
+      const ids = new Set(state.exports.map(job => String(job.id)));
+      for (const row of [...list.children]) if (!ids.has(row.dataset.id)) row.remove();
+      for (const job of state.exports) {
+        let row = [...list.children].find(row => row.dataset.id === String(job.id));
+        if (!row) {
+          row = el('li', 'export-item'); row.dataset.id = String(job.id);
+          const progress = el('progress'); progress.max = 100; progress.setAttribute('aria-label', 'Exportfortschritt');
+          const cancel = el('button', 'btn small', 'Abbrechen'); cancel.addEventListener('click', () => ipc('cancel_export', { id: job.id }));
+          row.append(el('strong'), el('small'), progress, cancel); list.append(row);
+        }
+        row.querySelector('strong').textContent = job.label;
+        row.querySelector('small').textContent = job.cancelling ? 'Wird abgebrochen …' : job.running ? `${job.phase || 'Vorbereiten'} · ${job.percent}%${job.eta_seconds != null ? ` · noch ca. ${short(job.eta_seconds)}` : ''}` : 'Wartet';
+        row.querySelector('progress').value = job.percent || 0;
+        row.querySelector('button').disabled = !!job.cancelling;
+        row.querySelector('button').textContent = job.running ? 'Abbrechen' : 'Entfernen';
+      }
+    }
+  }
+  function renderAudioTest() {
+    const test = state.audio_test || {};
+    $('audio-test-start').disabled = !loaded || state.busy || state.recording || test.running || !state.ffmpeg_available;
+    $('audio-test-cancel').hidden = !test.running;
+    $('audio-test-status').textContent = test.error || (test.running ? `${test.phase || 'Audiogeräte öffnen'} · ${test.percent || 0}%` : test.src ? 'Test bereit. Höre dir den Mix an und passe bei Bedarf die Lautstärke an.' : 'Bereit für einen Audio-Test.');
+    $('audio-test-status').classList.toggle('is-error', !!test.error);
+    const levels = test.levels || [];
+    const box = $('audio-levels');
+    if (box.children.length !== levels.length) {
+      box.replaceChildren(...levels.map(() => { const row = el('div', 'audio-level'); const meter = el('meter'); meter.min = 0; meter.max = 1; meter.low = 0.01; meter.high = 0.9; meter.optimum = 0.4; row.append(el('span'), meter, el('span')); return row; }));
+    }
+    levels.forEach(([label, peak], index) => {
+      const row = box.children[index]; row.children[0].textContent = label;
+      row.children[1].value = Math.min(1, Math.max(0, 1 + 20 * Math.log10(Math.max(peak, 0.001)) / 60));
+      row.children[1].setAttribute('aria-label', label + ' Pegel');
+      row.children[2].textContent = peak >= 1 ? 'Übersteuert' : peak > 0 ? `${(20 * Math.log10(peak)).toFixed(0)} dBFS` : 'Stille';
+    });
+    const preview = $('audio-preview');
+    if (test.src && preview.getAttribute('src') !== test.src) preview.src = test.src;
+    if (!test.src && preview.hasAttribute('src')) { preview.pause(); preview.removeAttribute('src'); preview.load(); }
+    preview.hidden = !test.src;
+  }
+  $('audio-test-start').addEventListener('click', () => { $('audio-preview').pause(); ipc('audio_test', { settings: currentSettings() }); });
+  $('audio-test-cancel').addEventListener('click', () => ipc('cancel_audio_test'));
 
   renderLibrary();
   renderState();

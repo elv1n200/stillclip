@@ -26,6 +26,32 @@ Puffer wiederherzustellen oder zu löschen.
 
 ## Was die App kann
 
+- **Exportliste.** Bis zu zwölf Schnitte oder Highlight-Exporte einreihen,
+  währenddessen weitere Clips bearbeiten. Fortschritt, geschätzte Restzeit und
+  Abbrechen sind in Bibliothek und Editor erreichbar. Ein Auftrag läuft zur
+  Zeit; Quellclips bleiben bis zum Abschluss gegen Umbenennen, Löschen und
+  automatisches Aufräumen geschützt. Beim tatsächlichen Beenden werden offene
+  Aufträge abgebrochen und unfertige Ausgaben entfernt; im Infobereich laufen
+  Exporte weiter. Die Warteschlange wird nicht über Neustarts gespeichert.
+- **Hochkant für Shorts und Reels.** 9:16 mit 720×1280 oder 1080×1920 wählen,
+  den Ausschnitt im Vorschaubild verschieben oder mit den Reglern positionieren.
+  Die Position gilt für die gesamte Auswahl. Auch Highlights speichern den
+  Zuschnitt je Ausschnitt; der Formatwähler bestimmt das gemeinsame Ausgabeformat.
+  Die Discord-Profile können die Auflösung zugunsten des Dateilimits senken.
+- **Audio-Test.** Vor der Aufnahme zehn Sekunden System-/Spielton und Mikrofon
+  mit den aktuellen Einstellungen prüfen, einschließlich des passenden
+  Spielprofils. Getrennte Pegel zeigen Stille und Übersteuerung; den fertigen Mix
+  direkt anhören. Der Test startet keine Bildschirmaufnahme und wird beim
+  nächsten Test oder regulären Beenden entfernt.
+- **Dateien ziehen.** Am Feld „Ziehen“ einen Clip gedrückt halten und nach
+  Discord oder in einen Ordner ziehen. Windows übergibt die echte Datei; der
+  Empfänger bestimmt den weiteren Ablauf. Discord versendet nichts automatisch.
+  Escape bricht das Ziehen ab. Als Alternative „Im Explorer anzeigen“ nutzen.
+- **Spiel und Tags.** Im Editor ein Spiel und bis zu zwölf Tags vergeben.
+  Bibliothek nach Spiel, Tag, Datumsbereich und Länge filtern oder in Namen,
+  Spielen und Tags suchen. Die Angaben bleiben nach Neustart und Umbenennen
+  erhalten und werden bei einzelnen Schnittexporten übernommen.
+
 - **Spielerkennung.** Rund 90 bekannte Spiele sind eingebaut; jedes andere
   Programm lässt sich mit einem Klick aus der Liste der laufenden Fenster oder
   über die EXE hinzufügen. Startet ein erkanntes Spiel, beginnt die Aufnahme von
