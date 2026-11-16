@@ -3,20 +3,24 @@
 #![recursion_limit = "256"]
 
 mod audio;
+mod audio_test;
 mod capture;
 mod diagnostics;
 mod discord;
+mod drag;
 mod encoding;
 mod export;
 mod games;
 mod highlights;
 mod icon;
+mod jobs;
 mod library;
 mod lifecycle;
 mod mechanics;
 mod media;
 mod overlay;
 mod platform;
+mod portrait;
 mod recorder;
 mod screenshot;
 mod settings;
@@ -59,6 +63,11 @@ const FPS_CHOICES: [u32; 5] = [24, 30, 60, 120, 144];
 pub enum AppEvent {
     Action(Value),
     Finished(JobResult),
+    ExportFinished(u64, Result<JobOutcome, String>),
+    ClipAnnotation(PathBuf, library::Annotation),
+    AudioMeters(u64, audio_test::Meters),
+    AudioFinished(u64, Result<audio_test::Preview, String>),
+    DragFinished(Result<(), String>),
     Notice(String),
     Hotkey(i32),
     HotkeysApplied(Vec<i32>),
@@ -121,6 +130,9 @@ struct App {
     index: Index,
     indexing: bool,
     busy: bool,
+    exports: jobs::Queue,
+    audio_test: audio_test::Test,
+    dragging: Option<(PathBuf, drag::Control)>,
     recording: bool,
     elapsed: u64,
     status: String,
@@ -201,6 +213,9 @@ impl App {
             next_id: 1,
             indexing: false,
             busy: false,
+            exports: jobs::Queue::default(),
+            audio_test: audio_test::Test::default(),
+            dragging: None,
             recording: false,
             elapsed: 0,
             status: String::new(),
@@ -370,7 +385,11 @@ impl App {
     fn refresh(&mut self) {
         match library::scan_clips(&self.settings.clips_dir) {
             Ok(mut clips) => {
-                if !self.busy && !self.capture.transitioning {
+                if !self.busy
+                    && !self.capture.transitioning
+                    && self.exports.is_empty()
+                    && self.dragging.is_none()
+                {
                     self.enforce_storage_limit(&mut clips);
                 }
                 self.clips_bytes = clips.iter().map(|clip| clip.bytes).sum();
@@ -408,6 +427,12 @@ impl App {
     fn update_media_map(&self) {
         if let Ok(mut files) = self.media.write() {
             files.clear();
+            if let Some(preview) = &self.audio_test.preview {
+                files.insert(
+                    format!("audio-test/{}", self.audio_test.id),
+                    preview.path.clone(),
+                );
+            }
             let thumbs = self.thumbnail_dir();
             for (id, clip) in &self.clips {
                 files.insert(id.to_string(), clip.path.clone());
@@ -495,6 +520,36 @@ impl App {
         });
     }
 
+    fn annotation(&self, path: &Path) -> library::Annotation {
+        self.index
+            .annotations
+            .get(&library::index_key(path))
+            .cloned()
+            .unwrap_or_else(|| {
+                let name = path.file_stem().unwrap_or_default().to_string_lossy();
+                let mut known = games::builtin_games();
+                known.extend(self.settings.custom_games.clone());
+                known.sort_by_key(|g| std::cmp::Reverse(g.name.len()));
+                let game = known
+                    .into_iter()
+                    .find(|g| {
+                        name.starts_with(&format!("{} ", g.name))
+                            || name.starts_with(&format!("{}_", g.name))
+                            || name.starts_with(&format!("{}-", g.name))
+                    })
+                    .map(|g| g.name)
+                    .unwrap_or_default();
+                library::Annotation {
+                    game,
+                    tags: Vec::new(),
+                }
+            })
+    }
+
+    fn clip_locked(&self, path: &Path) -> bool {
+        self.exports.uses(path) || self.dragging.as_ref().is_some_and(|(p, _)| p == path)
+    }
+
     fn clip_json(&self, id: u64, clip: &Clip) -> Value {
         let entry = self.index.current(clip);
         json!({
@@ -512,6 +567,9 @@ impl App {
             // Marked moments are kept by path, so they show before the clip is indexed.
             "markers": self.markers_of(&clip.path),
             "favorite": self.index.favorites.contains(&library::index_key(&clip.path)),
+            "locked": self.clip_locked(&clip.path),
+            "game": self.annotation(&clip.path).game,
+            "tags": self.annotation(&clip.path).tags,
             "pending": entry.is_none(),
             "path": clip.path,
         })
@@ -548,6 +606,10 @@ impl App {
             "elapsed": self.elapsed,
             "busy": self.busy || self.capture.transitioning,
             "capture_busy": self.capture.transitioning,
+            "exports": self.exports.views(),
+            "audio_test": self.audio_test.state(),
+            "dragging": self.dragging.is_some(),
+            "export_limit": jobs::LIMIT,
             "status": self.status,
             "error": self.error,
             "ffmpeg_available": self.ffmpeg.is_some(),
@@ -700,6 +762,10 @@ impl App {
     }
 
     fn recording_job(&mut self, action: &str, proxy: EventLoopProxy<AppEvent>) {
+        if action == "start" && self.audio_test.active.is_some() {
+            self.message(Err("Beende zuerst den Audio-Test.".into()));
+            return;
+        }
         if matches!(action, "start" | "stop") {
             self.capture.request(action == "start");
             self.advance_capture(proxy);
@@ -970,6 +1036,148 @@ impl App {
         });
     }
 
+    fn cancel_background(&mut self) {
+        self.exports.cancel_all();
+        self.audio_test.cancel();
+        if let Some((_, flag)) = &self.dragging {
+            flag.cancel();
+        }
+    }
+
+    fn start_audio_test(
+        &mut self,
+        command: &Value,
+        proxy: EventLoopProxy<AppEvent>,
+    ) -> Result<(), String> {
+        if self.audio_test.active.is_some() || self.recording || self.capture.transitioning {
+            return Err("Beende zuerst die Aufnahme oder den laufenden Audio-Test.".into());
+        }
+        let ffmpeg = self
+            .ffmpeg
+            .clone()
+            .ok_or("Bitte zuerst FFmpeg auswählen.")?;
+        let mut prefs: Settings = serde_json::from_value(command["settings"].clone())
+            .map_err(|e| format!("Ungültige Audio-Einstellungen: {e}"))?;
+        prefs = prefs.sanitized();
+        let exe = self
+            .active_game
+            .as_ref()
+            .map(|g| g.exe.as_str())
+            .unwrap_or(&prefs.target_exe);
+        let prefs = prefs.for_game(exe);
+        let mut sources = Vec::new();
+        if prefs.system_audio {
+            let source = if prefs.game_audio {
+                let target = games::visible_apps()
+                    .into_iter()
+                    .find(|app| {
+                        self.active_game
+                            .as_ref()
+                            .map_or(app.exe == prefs.target_exe, |game| game.matches(app))
+                    })
+                    .ok_or("Starte das Zielspiel für den Spielton-Test.")?;
+                audio::AudioSource::Process { pid: target.pid }
+            } else {
+                audio::AudioSource::Loopback
+            };
+            sources.push((source, settings::gain(prefs.system_volume)));
+        }
+        if prefs.microphone {
+            sources.push((
+                audio::AudioSource::Microphone {
+                    device_id: prefs.microphone_device,
+                },
+                settings::gain(prefs.microphone_volume),
+            ));
+        }
+        if sources.is_empty() {
+            return Err("Aktiviere Systemton oder Mikrofon für den Audio-Test.".into());
+        }
+        self.audio_test.id += 1;
+        let id = self.audio_test.id;
+        self.audio_test.preview = None;
+        self.audio_test.error = None;
+        self.audio_test.levels.clear();
+        self.audio_test.meters.clear();
+        self.update_media_map();
+        let control = jobs::Control::new();
+        self.audio_test.active = Some(control.clone());
+        let root = self.config.join("previews");
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                audio_test::record(&ffmpeg, &root, sources, control, |meters| {
+                    let _ = proxy.send_event(AppEvent::AudioMeters(id, meters));
+                })
+            }))
+            .unwrap_or_else(|_| Err("Der Audio-Test wurde unerwartet beendet.".into()));
+            let _ = proxy.send_event(AppEvent::AudioFinished(id, result));
+        });
+        Ok(())
+    }
+
+    fn queue_export(
+        &mut self,
+        label: String,
+        sources: Vec<PathBuf>,
+        task: jobs::Work,
+        proxy: EventLoopProxy<AppEvent>,
+    ) {
+        match self.exports.push(label, sources, task) {
+            Ok(()) => {
+                self.message(Ok("Export zur Warteschlange hinzugefügt.".into()));
+                self.start_exports(proxy);
+            }
+            Err(error) => self.message(Err(error)),
+        }
+    }
+
+    fn start_exports(&mut self, proxy: EventLoopProxy<AppEvent>) {
+        if self.busy || self.closing {
+            return;
+        }
+        let Some((job, control)) = self.exports.start_next() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (job.work)(control.clone())
+            }))
+            .unwrap_or_else(|_| Err("Der Export wurde unerwartet beendet.".into()));
+            if result.is_ok() {
+                control.progress(1.0, "Gespeichert");
+            }
+            let _ = proxy.send_event(AppEvent::ExportFinished(job.id, result));
+        });
+    }
+
+    fn finish_export(
+        &mut self,
+        id: u64,
+        result: Result<JobOutcome, String>,
+        proxy: EventLoopProxy<AppEvent>,
+    ) {
+        if !self.exports.finish(id) {
+            return;
+        }
+        match result {
+            Ok(outcome) => {
+                self.message(Ok(outcome.message.clone()));
+                self.notify(&outcome.message, false, outcome.saved);
+            }
+            Err(error) => {
+                let cancelled = error == jobs::CANCELLED;
+                self.message(if cancelled {
+                    Ok(error.clone())
+                } else {
+                    Err(error.clone())
+                });
+                self.notify(&error, !cancelled, None);
+            }
+        }
+        self.start_exports(proxy);
+        self.refresh();
+    }
+
     fn apply_hotkeys(&mut self) {
         let mut bindings = Vec::new();
         if let Some(key) = self.settings.hotkey_replay.virtual_key() {
@@ -1007,6 +1215,12 @@ impl App {
             settings.clips_dir = self.settings.clips_dir.clone();
         }
         let settings = settings.sanitized();
+        if !self.exports.is_empty() && settings.clips_dir != self.settings.clips_dir {
+            self.message(Err(
+                "Beende zuerst die Exportliste, bevor du den Clip-Ordner änderst.".into(),
+            ));
+            return;
+        }
         let restricted = self.recording && self.settings.capture_changed(&settings);
         if restricted {
             self.message(Err(
@@ -1049,6 +1263,19 @@ impl App {
 
     fn action(&mut self, command: Value, hwnd: isize, proxy: EventLoopProxy<AppEvent>) {
         let action = command["action"].as_str().unwrap_or("");
+        if action == "cancel_export" {
+            if let Some(id) = command["id"].as_u64() {
+                self.exports.cancel(id);
+            }
+            return;
+        }
+        if action == "cancel_audio_test" {
+            self.audio_test.cancel();
+            return;
+        }
+        if self.closing {
+            return;
+        }
         if action == "ready" {
             return;
         }
@@ -1076,7 +1303,62 @@ impl App {
             self.message(Err("Einen Moment, der letzte Vorgang läuft noch.".into()));
             return;
         }
+        if matches!(action, "rename" | "delete")
+            && self
+                .clip_path(&command)
+                .ok()
+                .is_some_and(|path| self.clip_locked(&path))
+        {
+            self.message(Err("Dieser Clip wird noch für einen Export benötigt. Beende oder entferne den Auftrag zuerst.".into()));
+            return;
+        }
+        if matches!(action, "choose_folder" | "choose_ffmpeg")
+            && (!self.exports.is_empty()
+                || self.audio_test.active.is_some()
+                || self.dragging.is_some())
+        {
+            self.message(Err("Beende zuerst die Exportliste.".into()));
+            return;
+        }
         match action {
+            "audio_test" => {
+                if let Err(error) = self.start_audio_test(&command, proxy) {
+                    self.message(Err(error.clone()));
+                    self.audio_test.error = Some(error);
+                }
+            }
+            "drag_clip" => {
+                if self.dragging.is_none() {
+                    match self.clip_path(&command) {
+                        Ok(path) => {
+                            let cancel = drag::Control::default();
+                            self.dragging = Some((path.clone(), cancel.clone()));
+                            std::thread::spawn(move || {
+                                let _ = proxy
+                                    .send_event(AppEvent::DragFinished(drag::file(&path, cancel)));
+                            });
+                        }
+                        Err(e) => self.message(Err(e)),
+                    }
+                }
+            }
+            "annotate" => {
+                let result = self.clip_path(&command).and_then(|path| {
+                    let tags = command["tags"]
+                        .as_array()
+                        .ok_or("Tags fehlen.")?
+                        .iter()
+                        .map(|t| t.as_str().map(str::to_owned).ok_or("Ungültiger Tag."))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let value = library::Annotation::normalized(
+                        command["game"].as_str().unwrap_or(""),
+                        &tags,
+                    )?;
+                    self.index
+                        .annotate(library::index_key(&path), value, &self.config)
+                });
+                self.message(result.map(|_| "Spiel und Tags gespeichert.".into()));
+            }
             "refresh" => self.refresh(),
             "rescan" => {
                 self.displays = capture::displays();
@@ -1269,6 +1551,7 @@ impl App {
                             .map(|item| {
                                 let path = self.clip_path(item)?;
                                 Ok(highlights::Piece {
+                                    crop: parse_crop(&item["crop"])?,
                                     markers: self.markers_of(&path),
                                     path,
                                     start: item["start"].as_f64().unwrap_or(f64::NAN),
@@ -1282,17 +1565,24 @@ impl App {
                         let profile = discord::Profile::from_id(
                             command["mode"].as_str().unwrap_or("precise"),
                         );
-                        let output = unique_trim_path(
-                            &self.settings.clips_dir,
-                            "Highlights",
-                            profile.map_or("Mix", |p| p.suffix()),
-                        );
+                        let width = match command["portrait_width"].as_u64() {
+                            Some(720) => Some(720),
+                            Some(1080) => Some(1080),
+                            _ if command["portrait_width"].is_null() => None,
+                            _ => {
+                                self.message(Err("Ungültiges Hochkantformat.".into()));
+                                return;
+                            }
+                        };
+                        let dir = self.settings.clips_dir.clone();
+                        let sources = pieces.iter().map(|p| p.path.clone()).collect();
                         let events = proxy.clone();
-                        self.file_job(proxy, "Dein Highlight-Clip wird zusammengestellt…", move || {
-                            let markers = highlights::export(&ffmpeg, &pieces, &output, profile)?;
+                        self.queue_export(format!("Highlights · {} Ausschnitte", pieces.len()), sources, Box::new(move |control| {
+                            let output = unique_trim_path(&dir, "Highlights", profile.map_or("Mix", |p| p.suffix()));
+                            let markers = highlights::export_controlled(&ffmpeg, &pieces, &output, profile, width, &control)?;
                             let _ = events.send_event(AppEvent::ClipMarkers(output.clone(), markers));
                             Ok(JobOutcome { message: "Highlight-Clip gespeichert. Die Originale bleiben erhalten.".into(), saved: Some(output), session: None, replay: false })
-                        });
+                        }), proxy);
                     }
                     (Err(error), _) => self.message(Err(error)),
                     (_, None) => self.message(Err("Bitte zuerst FFmpeg auswählen.".into())),
@@ -1314,7 +1604,14 @@ impl App {
                 (Ok(path), Some(ffmpeg)) => {
                     let start = command["start"].as_f64().unwrap_or(f64::NAN);
                     let end = command["end"].as_f64().unwrap_or(f64::NAN);
-                    let discord_profile =
+                    let crop = match parse_crop(&command["crop"]) {
+                        Ok(crop) => crop,
+                        Err(error) => {
+                            self.message(Err(error));
+                            return;
+                        }
+                    };
+                    let profile =
                         discord::Profile::from_id(command["mode"].as_str().unwrap_or("precise"));
                     let mode = if command["mode"].as_str() == Some("fast") {
                         TrimMode::Fast
@@ -1327,36 +1624,41 @@ impl App {
                         .to_string_lossy()
                         .into_owned();
                     let dir = self.settings.clips_dir.clone();
-                    // Marked moments of the source; the ones inside the cut move along.
                     let marks = self.markers_of(&path);
+                    let annotation = self.annotation(&path);
                     let events = proxy.clone();
-                    let notice = if discord_profile.is_some() {
-                        "Dein Discord-Clip wird komprimiert und geprüft…"
-                    } else {
-                        "Dein Clip wird geschnitten…"
-                    };
-                    self.file_job(proxy, notice, move || {
+                    let label = format!(
+                        "{} · {}",
+                        stem,
+                        profile.map_or(
+                            if crop.is_some() {
+                                "Hochkant"
+                            } else {
+                                "Schnitt"
+                            },
+                            |p| p.label()
+                        )
+                    );
+                    self.queue_export(label, vec![path.clone()], Box::new(move |control| {
+                        control.check()?;
                         let duration = recorder::probe_duration(&ffmpeg, &path)?;
-                        let Some((start, end)) = mechanics::editor_range(start, end, duration) else {
-                            return Err("Der Ausschnitt muss mindestens zwei Sekunden lang sein und innerhalb des Videos liegen. Kürzere Videos können vollständig gespeichert werden.".into());
-                        };
-                        let suffix = discord_profile.map_or("Schnitt", |profile| profile.suffix());
+                        let (start, end) = mechanics::editor_range(start, end, duration).ok_or("Der Ausschnitt muss mindestens zwei Sekunden lang sein und innerhalb des Videos liegen.")?;
+                        let suffix = profile.map_or(if crop.is_some() { "Hochkant" } else { "Schnitt" }, |p| p.suffix());
                         let output = unique_trim_path(&dir, &stem, suffix);
-                        let (from, message) = if let Some(profile) = discord_profile {
-                            let bytes = discord::export_clip(&ffmpeg, &path, &output, start, end, profile)?;
-                            (start, format!("{}: {:.2} MB gespeichert und Dateilimit geprüft. Das Original bleibt erhalten.", profile.label(), bytes as f64 / 1_000_000.0))
+                        let workspace = export::Snapshot::new(&dir, &[])?;
+                        let staged = workspace.dir.join("clip.mp4");
+                        let (from, message) = if let Some(profile) = profile {
+                            let bytes = discord::export_controlled(&ffmpeg, &path, &staged, start, end, profile, crop, &control.part(0.0, 0.99))?;
+                            (start, format!("{}: {:.2} MB gespeichert und Dateilimit geprüft.", profile.label(), bytes as f64 / 1_000_000.0))
                         } else {
-                            let from = recorder::trim_clip(&ffmpeg, &path, &output, start, end, mode)?;
-                            (from, "Schnitt als neuer Clip gespeichert. Das Original bleibt erhalten.".into())
+                            let from = recorder::trim_controlled(&ffmpeg, &path, &staged, start, end, mode, crop, &control.part(0.0, 0.99))?;
+                            (from, "Neuer Clip gespeichert. Das Original bleibt erhalten.".into())
                         };
+                        control.check()?; workspace.publish(&staged, &output)?;
                         send_markers(&events, &output, &marks, from, end - from);
-                        Ok(JobOutcome {
-                            message,
-                            saved: Some(output),
-                            session: None,
-                            replay: false,
-                        })
-                    });
+                        let _ = events.send_event(AppEvent::ClipAnnotation(output.clone(), annotation));
+                        Ok(JobOutcome { message, saved: Some(output), session: None, replay: false })
+                    }), proxy);
                 }
                 (Err(error), _) => self.message(Err(error)),
                 (_, None) => self.message(Err("Bitte zuerst FFmpeg auswählen.".into())),
@@ -1442,6 +1744,14 @@ impl App {
                         self.index.favorites.insert(library::index_key(path));
                         self.index.save(&self.config);
                     }
+                    let annotation = self
+                        .index
+                        .annotations
+                        .remove(&old)
+                        .unwrap_or_else(|| self.annotation(Path::new(&old)));
+                    self.index
+                        .annotations
+                        .insert(library::index_key(path), annotation);
                     let moved = self
                         .index
                         .entries
@@ -1562,6 +1872,15 @@ fn marker_state(at: f64, before: f64, after: f64, buffered: Option<(f64, f64)>) 
     let ready = at + after <= to + 0.001;
     let available = ((at + after).min(to) - (at - before).max(from)).max(0.0);
     (ready, available)
+}
+
+fn parse_crop(value: &Value) -> Result<Option<portrait::Crop>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let crop: portrait::Crop =
+        serde_json::from_value(value.clone()).map_err(|_| "Ungültiger Hochkant-Ausschnitt.")?;
+    crop.validate().map(Some)
 }
 
 fn unique_trim_path(dir: &Path, stem: &str, suffix: &str) -> PathBuf {
@@ -1821,7 +2140,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     TrayAction::Quit => {
                         app.closing = true;
-                        if app.busy || app.capture.transitioning {
+                        app.cancel_background();
+                        if app.busy || app.capture.transitioning || !app.exports.is_empty() || app.audio_test.active.is_some() || app.dragging.is_some() {
                             app.capture.request(false);
                             app.advance_capture(proxy.clone());
                             app.status = "Vorgang wird abgeschlossen, danach schließt Stillclip…".into();
@@ -1890,10 +2210,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 app.update_tray();
                 app.sync(&view);
             }
+            Event::UserEvent(AppEvent::AudioMeters(id, meters)) => { if id == app.audio_test.id { app.audio_test.meters = meters; } }
+            Event::UserEvent(AppEvent::AudioFinished(id, result)) => {
+                if id == app.audio_test.id {
+                    app.audio_test.active = None; app.audio_test.meters.clear(); app.audio_test.levels.clear();
+                    match result {
+                        Ok(preview) => { app.audio_test.preview = Some(preview); app.audio_test.error = None; }
+                        Err(e) => { app.audio_test.error = (e != jobs::CANCELLED).then_some(e); }
+                    }
+                    app.update_media_map(); app.sync(&view);
+                }
+            }
+            Event::UserEvent(AppEvent::DragFinished(result)) => {
+                app.dragging = None;
+                if let Err(e) = result { app.message(Err(e)); }
+                app.sync(&view);
+            }
+            Event::UserEvent(AppEvent::ClipAnnotation(path, annotation)) => {
+                app.index.annotations.insert(library::index_key(&path), annotation); app.index.save(&app.config);
+            }
+            Event::UserEvent(AppEvent::ExportFinished(id, result)) => {
+                app.finish_export(id, result, proxy.clone()); app.sync(&view);
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() { *control_flow = ControlFlow::Exit; }
+            }
             Event::UserEvent(AppEvent::Finished(result)) => {
                 app.finish(result, proxy.clone());
                 app.sync(&view);
-                if app.closing && !app.recording && !app.busy && !app.capture.transitioning {
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() {
                     *control_flow = ControlFlow::Exit;
                 }
             }
@@ -1915,7 +2258,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 } else {
                     app.closing = true;
-                    if app.busy || app.capture.transitioning {
+                    app.cancel_background();
+                    if app.busy || app.capture.transitioning || !app.exports.is_empty() || app.audio_test.active.is_some() || app.dragging.is_some() {
                         app.capture.request(false);
                         app.advance_capture(proxy.clone());
                         app.status = "Vorgang wird abgeschlossen, danach schließt Stillclip…".into();
@@ -1952,6 +2296,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         std::process::exit(1);
                     }
                 }
+                if app.closing && !app.recording && !app.busy && !app.capture.transitioning && app.exports.is_empty() && app.audio_test.active.is_none() && app.dragging.is_none() { *control_flow = ControlFlow::Exit; }
+                if app.audio_test.active.is_some() { app.audio_test.poll(); app.sync(&view); }
+                app.start_exports(proxy.clone());
+                if !app.exports.is_empty() { app.sync(&view); }
                 if let Some(recorder) = app.recorder.as_mut() {
                     let issue = recorder.poll();
                     let elapsed = recorder.elapsed().as_secs();
@@ -1985,6 +2333,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Event::LoopDestroyed => {
+                app.cancel_background();
                 app.index.save(&app.config);
                 app.recorder.take();
                 app.watcher.take();

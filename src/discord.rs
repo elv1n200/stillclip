@@ -89,7 +89,10 @@ impl Plan {
     fn filter(&self) -> String {
         // Fit inside the budget's resolution without upscaling, stretching or
         // increasing the source frame rate; x264 needs even dimensions.
-        let ratio = format!("min(1,min({}/iw,{}/ih))", self.width, self.height);
+        let ratio = format!(
+            "min(1,if(gte(iw,ih),min({}/iw,{}/ih),min({}/iw,{}/ih)))",
+            self.width, self.height, self.height, self.width
+        );
         format!(
             "scale=w='max(2,trunc(iw*{ratio}/2)*2)':h='max(2,trunc(ih*{ratio}/2)*2)',fps=fps='if(isnan(source_fps),30,min(source_fps,{}))'",
             self.fps
@@ -108,6 +111,28 @@ pub fn export_clip(
     export_with_limit(ffmpeg, input, output, start, end, profile.limit_bytes())
 }
 
+pub fn export_controlled(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    start: f64,
+    end: f64,
+    profile: Profile,
+    crop: Option<crate::portrait::Crop>,
+    control: &crate::jobs::Control,
+) -> Result<u64, String> {
+    encode_with_limit(
+        ffmpeg,
+        input,
+        output,
+        start,
+        end,
+        profile.limit_bytes(),
+        crop,
+        control,
+    )
+}
+
 fn export_with_limit(
     ffmpeg: &Path,
     input: &Path,
@@ -116,6 +141,30 @@ fn export_with_limit(
     end: f64,
     limit: u64,
 ) -> Result<u64, String> {
+    encode_with_limit(
+        ffmpeg,
+        input,
+        output,
+        start,
+        end,
+        limit,
+        None,
+        &crate::jobs::Control::new(),
+    )
+}
+
+fn encode_with_limit(
+    ffmpeg: &Path,
+    input: &Path,
+    output: &Path,
+    start: f64,
+    end: f64,
+    limit: u64,
+    crop: Option<crate::portrait::Crop>,
+    control: &crate::jobs::Control,
+) -> Result<u64, String> {
+    control.check()?;
+    let crop = crop.map(|c| c.validate()).transpose()?;
     if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
         return Err("Wähle einen gültigen Clipbereich mit Ende nach dem Anfang.".into());
     }
@@ -163,7 +212,10 @@ fn export_with_limit(
                     "-1",
                     "-vf",
                 ])
-                .arg(plan.filter())
+                .arg(crop.map_or_else(
+                    || plan.filter(),
+                    |c| format!("{},{}", c.filter(), plan.filter()),
+                ))
                 .args([
                     "-filter_threads",
                     "2",
@@ -208,9 +260,17 @@ fn export_with_limit(
                     ])
                     .arg(&staged);
             }
-            let result = crate::capture::run_output(encode).map_err(|error| {
-                format!("Discord-Export konnte nicht gestartet werden: {error}")
-            })?;
+            let base = if attempt == 0 { 0.0 } else { 0.9 };
+            let step = if attempt == 0 { 0.45 } else { 0.045 };
+            let result = control.part(base + (pass - 1) as f64 * step, step).run(
+                &mut encode,
+                seconds,
+                if pass == 1 {
+                    "Discord: Video analysieren"
+                } else {
+                    "Discord: Video komprimieren"
+                },
+            )?;
             if !result.status.success() {
                 return Err(format!(
                     "Discord-Export fehlgeschlagen. {}",
@@ -230,6 +290,7 @@ fn export_with_limit(
             if (exported.duration - seconds).abs() > 0.25 || exported.audio != info.audio {
                 return Err("Der Discord-Export enthält nicht den vollständigen Ausschnitt. Bitte erneut versuchen.".into());
             }
+            control.check()?;
             workspace.publish(&staged, output)?;
             return Ok(bytes);
         }

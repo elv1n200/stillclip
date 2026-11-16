@@ -78,6 +78,7 @@ pub fn serve(path: &Path, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         .to_ascii_lowercase()
         .as_str()
     {
+        "wav" => "audio/wav",
         "webm" => "video/webm",
         "mov" => "video/quicktime",
         "mkv" => "video/x-matroska",
@@ -91,7 +92,14 @@ pub fn serve(path: &Path, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         .header("Content-Type", mime)
         .header("Accept-Ranges", "bytes")
         .header("Content-Length", length.to_string())
-        .header("Cache-Control", if mime.starts_with("image/") { "private, max-age=86400" } else { "no-store" })
+        .header(
+            "Cache-Control",
+            if mime.starts_with("image/") {
+                "private, max-age=86400"
+            } else {
+                "no-store"
+            },
+        )
         .header("Access-Control-Allow-Origin", "http://app.localhost");
     if partial {
         builder = builder.header("Content-Range", format!("bytes {start}-{end}/{size}"));

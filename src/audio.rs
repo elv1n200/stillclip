@@ -8,7 +8,7 @@
 use crate::capture::AudioInput;
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
         mpsc, Arc,
     },
     thread::JoinHandle,
@@ -44,12 +44,30 @@ impl AudioSource {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct Meter(Arc<AtomicU32>);
+impl Meter {
+    fn feed(&self, bytes: &[u8], gain: f32) {
+        let peak = bytes
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .filter(|v| v.is_finite())
+            .map(|v| (v.abs() * gain).min(2.0))
+            .fold(0.0_f32, f32::max);
+        self.0.fetch_max(peak.to_bits(), Ordering::Relaxed);
+    }
+    pub fn take(&self) -> f32 {
+        f32::from_bits(self.0.swap(0, Ordering::Relaxed))
+    }
+}
+
 static PIPE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 /// One running capture thread feeding one named pipe.
 pub struct AudioPipe {
     pub input: AudioInput,
     pub source: AudioSource,
+    pub meter: Meter,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -62,13 +80,22 @@ impl AudioPipe {
         let path = format!("\\\\.\\pipe\\stillclip-{}-{sequence}", std::process::id());
         let stop = Arc::new(AtomicBool::new(false));
         let (ready_sender, ready_receiver) = mpsc::channel::<Result<(), String>>();
+        let meter = Meter::default();
+        let thread_meter = meter.clone();
         let thread_source = source.clone();
         let thread_stop = stop.clone();
         let thread_path = path.clone();
         let thread = std::thread::Builder::new()
             .name(format!("audio-{sequence}"))
             .spawn(move || {
-                platform::run(thread_source, thread_path, thread_stop, ready_sender);
+                platform::run(
+                    thread_source,
+                    thread_path,
+                    thread_stop,
+                    ready_sender,
+                    thread_meter,
+                    gain,
+                );
             })
             .map_err(|error| format!("Der Audio-Thread konnte nicht gestartet werden: {error}"))?;
         let mut pipe = AudioPipe {
@@ -80,6 +107,7 @@ impl AudioPipe {
                 gain,
             },
             source,
+            meter,
             stop,
             thread: Some(thread),
         };
@@ -563,6 +591,8 @@ mod platform {
         path: String,
         stop: Arc<AtomicBool>,
         ready: Sender<Result<(), String>>,
+        meter: super::Meter,
+        gain: f32,
     ) {
         let _com = Com::init();
         let enumerator = match enumerator() {
@@ -685,6 +715,7 @@ mod platform {
                     let bytes = unsafe {
                         std::slice::from_raw_parts(data.add(skip * frame_bytes), keep * frame_bytes)
                     };
+                    meter.feed(bytes, gain);
                     let ok = pipe.write_all(bytes).is_ok();
                     clock.written += keep as u64;
                     ok
@@ -742,7 +773,14 @@ mod platform {
     use super::AudioSource;
     use std::sync::{atomic::AtomicBool, mpsc::Sender, Arc};
 
-    pub fn run(_: AudioSource, _: String, _: Arc<AtomicBool>, ready: Sender<Result<(), String>>) {
+    pub fn run(
+        _: AudioSource,
+        _: String,
+        _: Arc<AtomicBool>,
+        ready: Sender<Result<(), String>>,
+        _: super::Meter,
+        _: f32,
+    ) {
         let _ = ready.send(Err("Audioaufnahme ist nur unter Windows verfügbar.".into()));
     }
     pub fn unblock(_: &str) {}
@@ -751,6 +789,20 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meter_applies_gain_ignores_invalid_samples_and_clears_idle_peak() {
+        let meter = Meter::default();
+        let bytes: Vec<u8> = [-0.25_f32, 0.75, f32::NAN, f32::INFINITY]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        meter.feed(&bytes, 2.0);
+        assert_eq!(meter.take(), 1.5);
+        assert_eq!(meter.take(), 0.0);
+        meter.feed(&bytes, 0.0);
+        assert_eq!(meter.take(), 0.0);
+    }
 
     #[test]
     fn clock_pads_gaps_and_trims_runaway_streams() {
