@@ -43,6 +43,11 @@ jobs:
           jq -e --arg sha "$source_sha" '.draft == true and .prerelease == false and .target_commitish == $sha' release.json
           tag=$(jq -r '.tag_name' release.json)
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh api "repos/$GH_REPO/git/matching-refs/tags/$tag" > tags.json
+          if jq -e --arg ref "refs/tags/$tag" 'any(.[]; .ref == $ref)' tags.json > /dev/null; then
+            tag_sha=$(gh api "repos/$GH_REPO/commits/$tag" --jq '.sha')
+            [[ "$tag_sha" == "$source_sha" ]]
+          fi
           printf 'RELEASE_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
       - name: Download and verify the original package
         shell: bash
