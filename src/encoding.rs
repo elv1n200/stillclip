@@ -21,7 +21,7 @@ pub fn capture_size(input_width: u32, input_height: u32, configured_height: u32)
     (width.max(2) & !1, height.max(2) & !1)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CaptureEncoding {
     pub bitrate: u32,
     pub max_bitrate: u32,
@@ -60,7 +60,14 @@ impl CaptureEncoding {
     /// The original defaults, kept for the documented 720p formulas.
     #[cfg(test)]
     pub fn default_profile(width: u32, height: u32, fps: u32) -> Self {
-        Self::for_output(width, height, fps, CONFIGURED_WIDTH, CONFIGURED_HEIGHT, BITRATE_MBPS)
+        Self::for_output(
+            width,
+            height,
+            fps,
+            CONFIGURED_WIDTH,
+            CONFIGURED_HEIGHT,
+            BITRATE_MBPS,
+        )
     }
 }
 
@@ -88,8 +95,14 @@ mod tests {
                 gop_frames: 12,
             }
         );
-        assert_eq!(CaptureEncoding::default_profile(640, 360, 24).bitrate, 15_000_000);
-        assert_eq!(CaptureEncoding::default_profile(1280, 720, 24).gop_frames, 9);
+        assert_eq!(
+            CaptureEncoding::default_profile(640, 360, 24).bitrate,
+            15_000_000
+        );
+        assert_eq!(
+            CaptureEncoding::default_profile(1280, 720, 24).gop_frames,
+            9
+        );
         // Other quality presets scale from their own configured size.
         assert_eq!(
             CaptureEncoding::for_output(2560, 1440, 60, 1920, 1080, 25).bitrate,

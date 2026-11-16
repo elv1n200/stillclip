@@ -9,7 +9,20 @@ Die Anwendung ist in Rust geschrieben (`tao`, `wry`), die Oberfläche läuft in
 der Microsoft Edge WebView2-Laufzeit, Aufnahme und Schnitt übernimmt eine lokal
 vorhandene `ffmpeg.exe`.
 
-![Bibliothek](shots/v2-library.png)
+![Bibliothek](shots/terminal-library.png)
+
+## Aktueller Stand
+
+Die Oberfläche verwendet einen schwarzen Hintergrund, eckige Rahmen,
+Monospace-Schrift und rosa Akzente. Die Einstellungen haben eine direkte
+Bereichsnavigation; Bibliothek und Editor verwenden dasselbe Design.
+
+Aufnahme und Clip-Export arbeiten unabhängig: Markieren, Beenden,
+Pufferbereinigung und Freiplatzprüfung bleiben während eines Exports aktiv.
+Der Export hält eigene Verweise auf seine Segmente und veröffentlicht erst den
+fertigen Clip. Start-/Stopp-Wünsche bleiben auch während eines Aufnahmewechsels
+erhalten. Eine zweite App-Instanz öffnet das vorhandene Fenster, statt dessen
+Puffer wiederherzustellen oder zu löschen.
 
 ## Was die App kann
 
@@ -80,7 +93,9 @@ vorhandene `ffmpeg.exe`.
 
 ## Starten und verwenden
 
-1. `target/release/stillclip.exe` starten. Die Microsoft Edge WebView2-Laufzeit
+1. Das ZIP aus dem Artefakt **stillclip-windows-x64** eines erfolgreichen
+   GitHub-Actions-Laufs entpacken und `stillclip.exe` starten. Bei einem eigenen
+   Build liegt sie unter `target/release/stillclip.exe`. Die Microsoft Edge WebView2-Laufzeit
    muss installiert sein (bei Windows 11 immer der Fall).
 2. Stillclip sucht eine vorhandene `ffmpeg.exe` (unter anderem `tools/ffmpeg.exe`
    neben der Anwendung, `PATH`, Streamlabs, WinGet). Alternativ unter
@@ -106,7 +121,7 @@ und wird danach entfernt.
 
 ## Einstellungen
 
-![Einstellungen](shots/v2-settings.png)
+![Einstellungen](shots/terminal-settings.png)
 
 | Bereich | Optionen |
 | --- | --- |
@@ -119,8 +134,10 @@ und wird danach entfernt.
 | Verhalten | Banner im Spiel, Ton beim Sichern, in den Infobereich schließen, Aufnahme beim Start, minimiert starten, Autostart |
 | Speicherort | Clip-Ordner wählen und öffnen |
 
-Aufnahme- und Ton-Einstellungen gelten ab der nächsten Aufnahme; Spiele,
-Tastenkürzel und Verhalten wirken sofort.
+Bild, Ton, Rückblicklängen, Markierungsfenster, präziser Export und
+Mindestfreiplatz sind während einer Aufnahme gesperrt, damit die angezeigten
+Werte immer zur laufenden Sitzung passen. Zum Ändern zuerst die Aufnahme
+beenden. Spiele, Tastenkürzel, Ordnerlimit und Verhalten bleiben anpassbar.
 
 ## Grenzen dieser Version
 
@@ -162,24 +179,24 @@ Abweichungen stehen in [MECHANICS.md](MECHANICS.md).
 ## Entwickeln
 
 Windows, Rust/Cargo und die Microsoft C++ Build Tools werden zum Bauen benötigt.
-Im Ordner `app` ausführen:
+Im Repository-Hauptordner ausführen:
 
 ```powershell
-cargo build --offline --release
-cargo test --offline
+cargo build --locked --release
+cargo test --locked
 ```
 
 Weitere Prüfungen:
 
 ```powershell
 # Synthetische FFmpeg-Tests: Schnitt, Vorschaubild, Segment-Export (kein Bildschirm)
-cargo test --offline -- --ignored
+cargo test --locked synthetic_ -- --ignored
 
 # Echte Aufnahme des Hauptbildschirms mit Systemton für etwa zehn Sekunden
-cargo test --offline real_capture -- --ignored --nocapture
+cargo test --locked real_capture -- --ignored --nocapture
 
 # Banner einmal anzeigen und als Bild festhalten
-$env:STILLCLIP_OVERLAY_SHOT="shots/overlay.png"; cargo test --offline overlay_smoke -- --ignored
+$env:STILLCLIP_OVERLAY_SHOT="shots/overlay.png"; cargo test --locked overlay_smoke -- --ignored
 
 # Gerenderte Oberfläche als PNG, ohne Aufnahme
 target/release/stillclip.exe --screenshot shots/library.png
@@ -199,6 +216,8 @@ Symbol im Infobereich.
 | Datei | Inhalt |
 | --- | --- |
 | `src/main.rs` | Fenster, WebView, Ereignisschleife, IPC-Aktionen, Hintergrundjobs |
+| `src/lifecycle.rs` | Getestete Start-/Stopp-Anforderungen während Aufnahmewechseln |
+| `src/export.rs` | Unabhängige Exporte mit gesicherten Segmenten und geschützter Veröffentlichung |
 | `src/games.rs` | Spieleliste, Fenster-/Prozess-Erkennung, Watcher-Thread |
 | `src/capture.rs` | Bildschirme (DXGI), Encoder-Erkennung, FFmpeg-Kommandozeile |
 | `src/audio.rs` | WASAPI-Aufnahme (Loopback/Mikrofon) in Named Pipes, Gerätewechsel |
@@ -209,3 +228,23 @@ Symbol im Infobereich.
 | `src/platform.rs` | Dialoge, Explorer, Papierkorb, Autostart, Hotkeys, Infobereich |
 | `src/encoding.rs`, `src/mechanics.rs` | Aus dem Original übernommene Formeln und Grenzen |
 | `ui/` | Oberfläche (`index.html`, `app.css`, `app.js`), wird in die EXE eingebettet |
+
+### Automatische Prüfungen und Downloads
+
+`.github/workflows/verify.yml` baut auf Windows, führt Unit-/Regressionstests
+und ausschließlich synthetische FFmpeg-Tests aus und stellt ein portables ZIP
+als Actions-Artefakt bereit. FFmpeg und WebView2 werden nicht mitgeliefert.
+Echte Bildschirm-/Mikrofonprüfungen bleiben ausdrücklich manuelle Tests.
+
+Die Oberfläche wird separat mit simulierten Zustandsdaten geprüft:
+
+```sh
+npm ci
+npx playwright install chromium
+npm test
+```
+
+Optional verwendet `CHROME_BIN` ein vorhandenes Chromium. Mit
+`STILLCLIP_SHOTS_DIR` werden Vorschauen bei 1280 und 720 Pixel Breite gespeichert.
+Die Browserprüfung ersetzt keinen Windows-Test von WASAPI, Grafikkartentreibern
+oder exklusiven Vollbildspielen.

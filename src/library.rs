@@ -92,6 +92,27 @@ pub fn over_limit(clips: &[Clip], limit_bytes: u64) -> Vec<Clip> {
     doomed
 }
 
+/// Keep failed deletions in the library so their index and markers survive.
+pub fn clean_limit(
+    clips: &mut Vec<Clip>,
+    limit_bytes: u64,
+    mut remove: impl FnMut(&Path) -> io::Result<()>,
+) -> (usize, u64, usize) {
+    let mut removed = Vec::new();
+    let mut freed = 0;
+    let mut failed = 0;
+    for clip in over_limit(clips, limit_bytes) {
+        if remove(&clip.path).is_ok() {
+            freed += clip.bytes;
+            removed.push(clip.path);
+        } else {
+            failed += 1;
+        }
+    }
+    clips.retain(|clip| !removed.contains(&clip.path));
+    (removed.len(), freed, failed)
+}
+
 // Reserve the destination before copying: fs::copy alone can overwrite a clip.
 fn copy_new(source: &Path, destination: &Path) -> io::Result<()> {
     let mut input = File::open(source)?;
@@ -331,18 +352,41 @@ mod tests {
     }
 
     #[test]
+    fn failed_cleanup_keeps_the_clip_and_its_markers_in_the_index() {
+        let mut clips = vec![clip("old", 2, 3), clip("locked", 2, 2), clip("new", 2, 1)];
+        let locked = index_key(&clips[1].path);
+        let mut index = Index::default();
+        index.entries.insert(
+            locked.clone(),
+            IndexEntry {
+                markers: vec![2.5],
+                ..Default::default()
+            },
+        );
+        let (count, _, failed) = clean_limit(&mut clips, 2 * 1024 * 1024 * 1024, |path| {
+            if index_key(path) == locked {
+                Err(io::ErrorKind::PermissionDenied.into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!((count, failed, clips.len()), (1, 1, 2));
+        index.prune(&clips, Path::new("unused-thumbnails"));
+        assert_eq!(index.entries[&locked].markers, vec![2.5]);
+    }
+
+    #[test]
     fn storage_limit_removes_the_oldest_clips_only() {
-        let clips = vec![
-            clip("neu", 3, 1),
-            clip("mittel", 4, 20),
-            clip("alt", 5, 90),
-        ];
+        let clips = vec![clip("neu", 3, 1), clip("mittel", 4, 20), clip("alt", 5, 90)];
         // Off by default and quiet while the folder fits.
         assert!(over_limit(&clips, 0).is_empty());
         assert!(over_limit(&clips, 12 * 1024 * 1024 * 1024).is_empty());
         // 10 GB: the oldest clip goes, the rest stays.
         let doomed = over_limit(&clips, 10 * 1024 * 1024 * 1024);
-        assert_eq!(doomed.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["alt"]);
+        assert_eq!(
+            doomed.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["alt"]
+        );
         // 3 GB: everything but the newest clip, which is never deleted.
         let doomed = over_limit(&clips, 3 * 1024 * 1024 * 1024);
         assert_eq!(

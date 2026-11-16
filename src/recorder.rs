@@ -7,7 +7,9 @@
 //! keyframe closest to the requested length, so nothing is re-encoded and the
 //! recording never pauses.
 use crate::audio::{AudioPipe, AudioSource};
-use crate::capture::{self, AudioInput, Capabilities, CaptureRequest, Display, Encoder, SEGMENT_SECONDS};
+use crate::capture::{
+    self, AudioInput, Capabilities, CaptureRequest, Display, Encoder, SEGMENT_SECONDS,
+};
 use crate::settings::Quality;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -187,7 +189,6 @@ pub struct Recorder {
     ffmpeg: PathBuf,
     ffprobe: Option<PathBuf>,
     session: Option<Session>,
-    warning: Option<String>,
 }
 
 pub fn buffer_dir(clips_dir: &Path) -> PathBuf {
@@ -226,13 +227,16 @@ pub fn parse_segment_list(text: &str, dir: &Path) -> Vec<Segment> {
     let mut segments: Vec<Segment> = Vec::new();
     for line in text.lines() {
         let mut fields = line.trim().rsplitn(3, ',');
-        let (Some(end), Some(start), Some(name)) = (fields.next(), fields.next(), fields.next()) else {
+        let (Some(end), Some(start), Some(name)) = (fields.next(), fields.next(), fields.next())
+        else {
             continue;
         };
         let path = dir.join(Path::new(name).file_name().unwrap_or_default());
-        let (Some(index), Ok(start), Ok(end)) =
-            (segment_index(&path), start.trim().parse::<f64>(), end.trim().parse::<f64>())
-        else {
+        let (Some(index), Ok(start), Ok(end)) = (
+            segment_index(&path),
+            start.trim().parse::<f64>(),
+            end.trim().parse::<f64>(),
+        ) else {
             continue;
         };
         if !(start.is_finite() && end.is_finite() && end >= start) {
@@ -295,9 +299,11 @@ pub fn tail_segments(segments: &[Segment], wanted: f64, estimate: f64) -> Vec<Se
 
 /// Segments older than the replay window plus a safety margin.
 pub fn expired_segments(segments: &[Segment], replay_seconds: u32) -> Vec<Segment> {
-    let Some(latest_end) = segments.iter().filter_map(|s| s.end).fold(None, |m: Option<f64>, e| {
-        Some(m.map_or(e, |m| m.max(e)))
-    }) else {
+    let Some(latest_end) = segments
+        .iter()
+        .filter_map(|s| s.end)
+        .fold(None, |m: Option<f64>, e| Some(m.map_or(e, |m| m.max(e))))
+    else {
         return Vec::new();
     };
     let keep_from = latest_end - f64::from(replay_seconds) - 2.0 * f64::from(SEGMENT_SECONDS);
@@ -315,7 +321,6 @@ impl Recorder {
             ffmpeg,
             ffprobe,
             session: None,
-            warning: None,
         }
     }
 
@@ -349,10 +354,6 @@ impl Recorder {
     }
 
     /// A replay can be saved successfully even if something else went wrong.
-    pub fn take_warning(&mut self) -> Option<String> {
-        self.warning.take()
-    }
-
     fn start_audio(config: &SessionConfig, warnings: &mut Vec<String>) -> Vec<AudioPipe> {
         let mut pipes = Vec::new();
         if config.system_audio {
@@ -412,7 +413,8 @@ impl Recorder {
         let _ = fs::write(dir.join("session.json"), marker);
         let list_path = dir.join("segments.csv");
         let log_path = dir.join("ffmpeg.log");
-        let strategies = capture::strategies(&config.display, config.encoder, config.capabilities.ddagrab);
+        let strategies =
+            capture::strategies(&config.display, config.encoder, config.capabilities.ddagrab);
         let (width, height) = capture::output_size(&config.display, config.quality);
         let mut failures = Vec::new();
         for strategy in &strategies {
@@ -420,8 +422,9 @@ impl Recorder {
             let audio = Self::start_audio(&config, &mut warnings);
             let inputs: Vec<AudioInput> = audio.iter().map(|pipe| pipe.input.clone()).collect();
             let _ = fs::remove_file(&list_path);
-            let log = File::create(&log_path)
-                .map_err(|error| format!("Das Aufnahmeprotokoll konnte nicht geöffnet werden: {error}"))?;
+            let log = File::create(&log_path).map_err(|error| {
+                format!("Das Aufnahmeprotokoll konnte nicht geöffnet werden: {error}")
+            })?;
             let mut command = capture::build_command(
                 &self.ffmpeg,
                 &CaptureRequest {
@@ -505,7 +508,9 @@ impl Recorder {
                 encoder: strategy.encoder,
                 rates: {
                     let (cw, ch, mbps) = config.quality.configured();
-                    crate::encoding::CaptureEncoding::for_output(width, height, config.fps, cw, ch, mbps)
+                    crate::encoding::CaptureEncoding::for_output(
+                        width, height, config.fps, cw, ch, mbps,
+                    )
                 },
                 min_free_bytes: config.min_free_bytes,
                 ticks: 0,
@@ -591,13 +596,16 @@ impl Recorder {
         for pipe in &mut session.audio {
             pipe.stop();
         }
-        let status = status.map_err(|error| format!("Die Aufnahme konnte nicht abgeschlossen werden: {error}"))?;
+        let status = status
+            .map_err(|error| format!("Die Aufnahme konnte nicht abgeschlossen werden: {error}"))?;
         if !status.success() {
             let detail = log_detail(&session.log_path);
             if !session.keep_full {
                 let _ = fs::remove_dir_all(&session.dir);
             }
-            return Err(format!("FFmpeg hat die Aufnahme nicht sauber beendet ({status}). {detail}"));
+            return Err(format!(
+                "FFmpeg hat die Aufnahme nicht sauber beendet ({status}). {detail}"
+            ));
         }
         let mut saved = None;
         if session.keep_full {
@@ -617,11 +625,18 @@ impl Recorder {
     /// Saves the last `seconds` of the running recording as a new clip.
     /// The recording keeps running; nothing is re-encoded unless precise clips
     /// are enabled. `prefix` names the file, e.g. the detected game.
-    pub fn save_replay(&mut self, seconds: u32, prefix: &str) -> Result<SavedClip, String> {
+    pub fn prepare_replay(
+        &mut self,
+        seconds: u32,
+        prefix: &str,
+    ) -> Result<crate::export::ReplayExport, String> {
         if seconds == 0 {
             return Err("Die Cliplänge muss mindestens eine Sekunde betragen.".into());
         }
-        let session = self.session.as_mut().ok_or("Starte zuerst eine Aufnahme.")?;
+        let session = self
+            .session
+            .as_mut()
+            .ok_or("Starte zuerst eine Aufnahme.")?;
         if session.started.elapsed() < Duration::from_millis(1500) {
             return Err("Die Aufnahme ist noch zu kurz. Warte einen Moment.".into());
         }
@@ -637,37 +652,33 @@ impl Recorder {
         }
         let gop = 0.4_f64.max(f64::from(session.fps.max(1)).recip() * 4.0);
         let elapsed = session.started.elapsed().as_secs_f64();
-        let finished_end = segments.iter().filter_map(|s| s.end).fold(0.0_f64, f64::max);
+        let finished_end = segments
+            .iter()
+            .filter_map(|s| s.end)
+            .fold(0.0_f64, f64::max);
         let estimate = (elapsed - finished_end).clamp(0.0, f64::from(SEGMENT_SECONDS) + 1.0);
         let chosen = tail_segments(&segments, f64::from(seconds) + gop, estimate);
         let prefix = sanitize_prefix(prefix);
         let output = clip_path(&session.clips_dir, &prefix);
-        let export = export_tail(
-            &self.ffmpeg,
-            self.ffprobe.as_deref(),
-            &chosen,
-            f64::from(seconds),
+        let snapshot = crate::export::Snapshot::new(&session.clips_dir, &chosen)?;
+        session.last_clip = Some(Instant::now());
+        Ok(crate::export::ReplayExport {
+            snapshot,
+            output,
+            ffmpeg: self.ffmpeg.clone(),
+            ffprobe: self.ffprobe.clone(),
+            span: None,
+            seconds: f64::from(seconds),
             gop,
-            &output,
-        )
-        .and_then(|start| {
-            if session.precise {
-                trim_to_exact_length(&self.ffmpeg, &output, f64::from(seconds), session.encoder, &session.rates)
-                    .map(|dropped| start + dropped)
-            } else {
-                Ok(start)
-            }
-        });
-        match export {
-            Ok(start) => {
-                session.last_clip = Some(Instant::now());
-                Ok(SavedClip { path: output, start })
-            }
-            Err(error) => {
-                let _ = fs::remove_file(&output);
-                Err(error)
-            }
-        }
+            precise: session.precise,
+            encoder: session.encoder,
+            rates: session.rates.clone(),
+        })
+    }
+
+    #[cfg(test)]
+    pub fn save_replay(&mut self, seconds: u32, prefix: &str) -> Result<SavedClip, String> {
+        self.prepare_replay(seconds, prefix)?.run()
     }
 
     /// Seconds of finished video the buffer currently holds, as `(from, to)`
@@ -679,8 +690,14 @@ impl Recorder {
             &fs::read_to_string(&session.list_path).unwrap_or_default(),
             &session.dir,
         );
-        let from = segments.iter().filter_map(|s| s.start).fold(f64::INFINITY, f64::min);
-        let to = segments.iter().filter_map(|s| s.end).fold(f64::NEG_INFINITY, f64::max);
+        let from = segments
+            .iter()
+            .filter_map(|s| s.start)
+            .fold(f64::INFINITY, f64::min);
+        let to = segments
+            .iter()
+            .filter_map(|s| s.end)
+            .fold(f64::NEG_INFINITY, f64::max);
         (from.is_finite() && to > from).then_some((from, to))
     }
 
@@ -688,14 +705,17 @@ impl Recorder {
     /// session started; `before` and `after` extend the clip on both sides.
     /// The recording keeps running, and nothing is re-encoded unless exact
     /// clips are switched on.
-    pub fn save_marker(
+    pub fn prepare_marker(
         &mut self,
         at: f64,
         before: f64,
         after: f64,
         prefix: &str,
-    ) -> Result<SavedClip, String> {
-        let session = self.session.as_mut().ok_or("Starte zuerst eine Aufnahme.")?;
+    ) -> Result<crate::export::ReplayExport, String> {
+        let session = self
+            .session
+            .as_mut()
+            .ok_or("Starte zuerst eine Aufnahme.")?;
         if session
             .last_clip
             .is_some_and(|at| at.elapsed() < CLIP_COOLDOWN)
@@ -703,13 +723,21 @@ impl Recorder {
             return Err("Der letzte Clip wurde gerade erst gesichert.".into());
         }
         let segments = scan_segments(&session.dir, &session.list_path);
-        let earliest = segments.iter().filter_map(|s| s.start).fold(f64::INFINITY, f64::min);
-        let latest = segments.iter().filter_map(|s| s.end).fold(f64::NEG_INFINITY, f64::max);
+        let earliest = segments
+            .iter()
+            .filter_map(|s| s.start)
+            .fold(f64::INFINITY, f64::min);
+        let latest = segments
+            .iter()
+            .filter_map(|s| s.end)
+            .fold(f64::NEG_INFINITY, f64::max);
         if !earliest.is_finite() || latest <= earliest {
             return Err("Es liegen noch keine fertigen Videodaten vor. Warte einen Moment.".into());
         }
         if at + after > latest + 0.001 {
-            return Err("Der Moment ist noch nicht vollständig aufgezeichnet. Warte einen Moment.".into());
+            return Err(
+                "Der Moment ist noch nicht vollständig aufgezeichnet. Warte einen Moment.".into(),
+            );
         }
         let from = (at - before).max(earliest);
         let to = (at + after).min(latest);
@@ -722,33 +750,31 @@ impl Recorder {
         }
         let gop = 0.4_f64.max(f64::from(session.fps.max(1)).recip() * 4.0);
         let output = clip_path(&session.clips_dir, &sanitize_prefix(prefix));
-        let export = export_span(
-            &self.ffmpeg,
-            self.ffprobe.as_deref(),
-            &chosen,
-            from,
-            to,
+        let snapshot = crate::export::Snapshot::new(&session.clips_dir, &chosen)?;
+        session.last_clip = Some(Instant::now());
+        Ok(crate::export::ReplayExport {
+            snapshot,
+            output,
+            ffmpeg: self.ffmpeg.clone(),
+            ffprobe: self.ffprobe.clone(),
+            span: Some((from, to)),
+            seconds: to - from,
             gop,
-            &output,
-        )
-        .and_then(|start| {
-            if session.precise {
-                trim_to_exact_length(&self.ffmpeg, &output, to - from, session.encoder, &session.rates)
-                    .map(|dropped| start + dropped)
-            } else {
-                Ok(start)
-            }
-        });
-        match export {
-            Ok(start) => {
-                session.last_clip = Some(Instant::now());
-                Ok(SavedClip { path: output, start })
-            }
-            Err(error) => {
-                let _ = fs::remove_file(&output);
-                Err(error)
-            }
-        }
+            precise: session.precise,
+            encoder: session.encoder,
+            rates: session.rates.clone(),
+        })
+    }
+
+    #[cfg(test)]
+    pub fn save_marker(
+        &mut self,
+        at: f64,
+        before: f64,
+        after: f64,
+        prefix: &str,
+    ) -> Result<SavedClip, String> {
+        self.prepare_marker(at, before, after, prefix)?.run()
     }
 
     fn export_all(&self, segments: &[Segment], output: &Path) -> Result<(), String> {
@@ -763,10 +789,22 @@ impl Recorder {
             let escaped = ffmpeg_path(&segment.path).replace('\'', "'\\''");
             list.push_str(&format!("file '{escaped}'\n"));
         }
-        fs::write(&list_path, list).map_err(|error| format!("Die Exportliste konnte nicht geschrieben werden: {error}"))?;
+        fs::write(&list_path, list)
+            .map_err(|error| format!("Die Exportliste konnte nicht geschrieben werden: {error}"))?;
         let result = command(&self.ffmpeg)
             .current_dir(&dir)
-            .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i"])
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+            ])
             .arg(&list_path)
             .args(["-c", "copy", "-movflags", "+faststart", "-f", "mp4"])
             .arg(output)
@@ -801,7 +839,8 @@ fn prepare_buffer_dir(dir: &Path) -> Result<(), String> {
     if dir.is_dir() {
         let _ = fs::remove_dir_all(dir);
     }
-    fs::create_dir_all(dir).map_err(|error| format!("Der Pufferordner konnte nicht erstellt werden: {error}"))?;
+    fs::create_dir_all(dir)
+        .map_err(|error| format!("Der Pufferordner konnte nicht erstellt werden: {error}"))?;
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -817,6 +856,7 @@ fn prepare_buffer_dir(dir: &Path) -> Result<(), String> {
 /// Segments left behind by a crash. With full-session mode they become a
 /// recovered recording; otherwise they are simply removed.
 pub fn recover_leftovers(ffmpeg: &Path, clips_dir: &Path) -> Result<Option<PathBuf>, String> {
+    let _ = fs::remove_dir_all(clips_dir.join(".stillclip-exports"));
     let dir = buffer_dir(clips_dir);
     if !dir.is_dir() {
         return Ok(None);
@@ -883,7 +923,9 @@ pub fn keyframe_before(ffprobe: &Path, path: &Path, at: f64) -> f64 {
     keyframes_in(ffprobe, path, Some((from, at + 0.5)))
         .into_iter()
         .filter(|key| *key <= at + 0.0005)
-        .fold(None, |best: Option<f64>, key| Some(best.map_or(key, |b| b.max(key))))
+        .fold(None, |best: Option<f64>, key| {
+            Some(best.map_or(key, |b| b.max(key)))
+        })
         .unwrap_or(at)
 }
 
@@ -939,7 +981,10 @@ fn keyframes_in(ffprobe: &Path, path: &Path, window: Option<(f64, f64)>) -> Vec<
         .lines()
         .filter_map(|line| {
             let (pts, flags) = line.trim().split_once(',')?;
-            flags.starts_with('K').then(|| pts.parse::<f64>().ok()).flatten()
+            flags
+                .starts_with('K')
+                .then(|| pts.parse::<f64>().ok())
+                .flatten()
         })
         .collect()
 }
@@ -964,7 +1009,7 @@ pub fn span_segments(segments: &[Segment], from: f64, to: f64) -> Vec<Segment> {
 /// never ends early.
 /// Returns where the finished clip begins on that timeline, which is at or
 /// shortly before `from`.
-fn export_span(
+pub(crate) fn export_span(
     ffmpeg: &Path,
     ffprobe: Option<&Path>,
     segments: &[Segment],
@@ -973,7 +1018,9 @@ fn export_span(
     gop: f64,
     output: &Path,
 ) -> Result<f64, String> {
-    let first = segments.first().ok_or("Keine Segmente zum Sichern vorhanden.")?;
+    let first = segments
+        .first()
+        .ok_or("Keine Segmente zum Sichern vorhanden.")?;
     let dir = first.path.parent().ok_or("Der Pufferordner fehlt.")?;
     if to <= from {
         return Err("Der gewünschte Ausschnitt ist leer.".into());
@@ -992,11 +1039,16 @@ fn export_span(
                 starts.push(first_range.start + (csv_start - base));
                 previous_end = segment.end.unwrap_or(csv_start);
             }
-            let containing = starts.iter().rposition(|start| *start <= target).unwrap_or(0);
+            let containing = starts
+                .iter()
+                .rposition(|start| *start <= target)
+                .unwrap_or(0);
             let key = keyframes(ffprobe, &segments[containing].path)
                 .into_iter()
                 .filter(|key| *key <= target + 0.0005)
-                .fold(None, |best: Option<f64>, key| Some(best.map_or(key, |b| b.max(key))))
+                .fold(None, |best: Option<f64>, key| {
+                    Some(best.map_or(key, |b| b.max(key)))
+                })
                 .unwrap_or_else(|| starts[containing].max(first_range.start));
             cut = (key - first_range.start).max(0.0);
         }
@@ -1012,7 +1064,12 @@ fn export_span(
         "concat:{}",
         segments
             .iter()
-            .map(|s| s.path.file_name().unwrap_or_default().to_string_lossy().into_owned())
+            .map(|s| s
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned())
             .collect::<Vec<_>>()
             .join("|")
     );
@@ -1027,7 +1084,16 @@ fn export_span(
         .args(["-i", &input, "-t"])
         .arg(format!("{length:.6}"))
         .args([
-            "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", "-f", "mp4",
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            "-f",
+            "mp4",
         ])
         .arg(output)
         .output()
@@ -1045,7 +1111,7 @@ fn export_span(
 }
 
 /// Returns where the finished clip begins on the CSV timeline.
-fn export_tail(
+pub(crate) fn export_tail(
     ffmpeg: &Path,
     ffprobe: Option<&Path>,
     segments: &[Segment],
@@ -1053,14 +1119,19 @@ fn export_tail(
     gop: f64,
     output: &Path,
 ) -> Result<f64, String> {
-    let first = segments.first().ok_or("Keine Segmente zum Sichern vorhanden.")?;
-    let last = segments.last().ok_or("Keine Segmente zum Sichern vorhanden.")?;
+    let first = segments
+        .first()
+        .ok_or("Keine Segmente zum Sichern vorhanden.")?;
+    let last = segments
+        .last()
+        .ok_or("Keine Segmente zum Sichern vorhanden.")?;
     let dir = first.path.parent().ok_or("Der Pufferordner fehlt.")?;
     let mut seek = None;
     if let Some(ffprobe) = ffprobe {
-        if let (Some(first_range), Some(last_range)) =
-            (probe_range(ffprobe, &first.path), probe_range(ffprobe, &last.path))
-        {
+        if let (Some(first_range), Some(last_range)) = (
+            probe_range(ffprobe, &first.path),
+            probe_range(ffprobe, &last.path),
+        ) {
             let end = last_range.start + last_range.duration;
             let target = end - seconds;
             if target > first_range.start + 0.05 {
@@ -1082,7 +1153,9 @@ fn export_tail(
                 let cut = keyframes(ffprobe, &segments[containing].path)
                     .into_iter()
                     .filter(|key| *key <= target + 0.0005)
-                    .fold(None, |best: Option<f64>, key| Some(best.map_or(key, |b| b.max(key))))
+                    .fold(None, |best: Option<f64>, key| {
+                        Some(best.map_or(key, |b| b.max(key)))
+                    })
                     .unwrap_or_else(|| (target - gop).max(first_range.start));
                 let relative = cut - first_range.start - 0.001;
                 if relative > 0.0 {
@@ -1094,10 +1167,7 @@ fn export_tail(
     if seek.is_none() && ffprobe.is_none() {
         // Without ffprobe fall back to the listed durations and a keyframe margin.
         let total: f64 = segments.iter().filter_map(Segment::duration).sum::<f64>()
-            + segments
-                .iter()
-                .filter(|s| s.duration().is_none())
-                .count() as f64
+            + segments.iter().filter(|s| s.duration().is_none()).count() as f64
                 * f64::from(SEGMENT_SECONDS)
                 * 0.5;
         let relative = total - seconds - gop;
@@ -1109,7 +1179,12 @@ fn export_tail(
         "concat:{}",
         segments
             .iter()
-            .map(|s| s.path.file_name().unwrap_or_default().to_string_lossy().into_owned())
+            .map(|s| s
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned())
             .collect::<Vec<_>>()
             .join("|")
     );
@@ -1121,7 +1196,20 @@ fn export_tail(
         export.arg("-ss").arg(format!("{seek:.6}"));
     }
     let result = export
-        .args(["-i", &input, "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-movflags", "+faststart", "-f", "mp4"])
+        .args([
+            "-i",
+            &input,
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            "-f",
+            "mp4",
+        ])
         .arg(output)
         .output()
         .map_err(|error| format!("Der Clip konnte nicht gespeichert werden: {error}"))?;
@@ -1137,7 +1225,10 @@ fn export_tail(
     Ok(first.start.unwrap_or(0.0) + seek.unwrap_or(0.0))
 }
 
-fn finish_process(child: &mut Child, timeout: Duration) -> Result<std::process::ExitStatus, String> {
+fn finish_process(
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, String> {
     match child.try_wait() {
         Ok(Some(status)) => return Ok(status),
         Ok(None) => {}
@@ -1185,7 +1276,13 @@ pub fn format_bytes(bytes: u64) -> String {
 pub fn sanitize_prefix(prefix: &str) -> String {
     let cleaned: String = prefix
         .chars()
-        .map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -1200,7 +1297,7 @@ pub fn sanitize_prefix(prefix: &str) -> String {
 
 /// Re-encodes the tail of `path` in place so the clip lasts exactly `seconds`.
 /// Returns the seconds that were dropped from the front.
-fn trim_to_exact_length(
+pub(crate) fn trim_to_exact_length(
     ffmpeg: &Path,
     path: &Path,
     seconds: f64,
@@ -1215,7 +1312,14 @@ fn trim_to_exact_length(
     let temporary = path.with_extension("exact.mp4");
     let mut encode = command(ffmpeg);
     encode
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-ss",
+        ])
         .arg(format!("{excess:.6}"))
         .arg("-i")
         .arg(path)
@@ -1268,7 +1372,9 @@ fn diagnostic(bytes: &[u8]) -> String {
 }
 
 fn log_detail(path: &Path) -> String {
-    fs::read(path).map(|bytes| diagnostic(&bytes)).unwrap_or_default()
+    fs::read(path)
+        .map(|bytes| diagnostic(&bytes))
+        .unwrap_or_default()
 }
 
 /// Facts about a media file for the library and the editor.
@@ -1327,7 +1433,10 @@ pub fn probe_media(ffmpeg: &Path, input: &Path) -> Result<MediaInfo, String> {
         .map_err(|error| format!("Die Videodaten konnten nicht gelesen werden: {error}"))?;
     let text = String::from_utf8_lossy(&output.stderr);
     let duration = parse_duration(&text).ok_or_else(|| {
-        format!("Die Datei enthält kein lesbares Video. {}", diagnostic(&output.stderr))
+        format!(
+            "Die Datei enthält kein lesbares Video. {}",
+            diagnostic(&output.stderr)
+        )
     })?;
     let (width, height) = parse_dimensions(&text).unwrap_or((0, 0));
     Ok(MediaInfo {
@@ -1447,7 +1556,16 @@ pub fn trim_clip(
                 .arg(input)
                 .arg("-t")
                 .arg(format!("{length:.6}"))
-                .args(["-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-avoid_negative_ts", "make_zero"]);
+                .args([
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a?",
+                    "-c",
+                    "copy",
+                    "-avoid_negative_ts",
+                    "make_zero",
+                ]);
         }
     }
     let result = export
@@ -1490,7 +1608,14 @@ pub fn make_thumbnail(ffmpeg: &Path, input: &Path, output: &Path, at: f64) -> Re
     }
     let temporary = output.with_extension("tmp.jpg");
     let result = command(ffmpeg)
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-ss",
+        ])
         .arg(format!("{:.3}", at.max(0.0)))
         .arg("-i")
         .arg(input)
@@ -1509,9 +1634,13 @@ pub fn make_thumbnail(ffmpeg: &Path, input: &Path, output: &Path, at: f64) -> Re
         .map_err(|error| format!("Vorschau fehlgeschlagen: {error}"))?;
     if !result.status.success() || fs::metadata(&temporary).map_or(true, |m| m.len() == 0) {
         let _ = fs::remove_file(&temporary);
-        return Err(format!("Vorschau fehlgeschlagen. {}", diagnostic(&result.stderr)));
+        return Err(format!(
+            "Vorschau fehlgeschlagen. {}",
+            diagnostic(&result.stderr)
+        ));
     }
-    fs::rename(&temporary, output).map_err(|error| format!("Vorschau konnte nicht gespeichert werden: {error}"))
+    fs::rename(&temporary, output)
+        .map_err(|error| format!("Vorschau konnte nicht gespeichert werden: {error}"))
 }
 
 #[cfg(test)]
@@ -1538,7 +1667,10 @@ mod tests {
         assert!(!recorder.is_recording());
         assert!(recorder.stop().is_err());
         assert!(recorder.save_replay(30, "Clip").is_err());
-        assert_eq!(sanitize_prefix("  Counter-Strike: 2 ?? "), "Counter-Strike 2");
+        assert_eq!(
+            sanitize_prefix("  Counter-Strike: 2 ?? "),
+            "Counter-Strike 2"
+        );
         assert_eq!(sanitize_prefix(""), "Clip");
         assert_eq!(sanitize_prefix("..."), "Clip");
     }
@@ -1617,7 +1749,10 @@ mod tests {
         let tail = tail_segments(&all, 7.0, 2.0);
         assert_eq!(tail.iter().map(|s| s.index).collect::<Vec<_>>(), vec![2, 3]);
         let tail = tail_segments(&all, 7.1, 2.0);
-        assert_eq!(tail.iter().map(|s| s.index).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            tail.iter().map(|s| s.index).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
         let tail = tail_segments(&all, 100.0, 2.0);
         assert_eq!(tail.len(), 4);
         let tail = tail_segments(&all, 1.0, 2.0);
@@ -1641,10 +1776,22 @@ mod tests {
 
     #[test]
     fn verbatim_prefixes_are_removed_for_ffmpeg() {
-        assert_eq!(plain_path(Path::new(r"\\?\C:\Clips\a.mp4")), PathBuf::from(r"C:\Clips\a.mp4"));
-        assert_eq!(plain_path(Path::new(r"\\?\UNC\nas\share\a.mp4")), PathBuf::from(r"\\nas\share\a.mp4"));
-        assert_eq!(plain_path(Path::new(r"C:\Clips\a.mp4")), PathBuf::from(r"C:\Clips\a.mp4"));
-        assert_eq!(ffmpeg_path(Path::new(r"\\?\C:\Clips\seg-000001.ts")), "C:/Clips/seg-000001.ts");
+        assert_eq!(
+            plain_path(Path::new(r"\\?\C:\Clips\a.mp4")),
+            PathBuf::from(r"C:\Clips\a.mp4")
+        );
+        assert_eq!(
+            plain_path(Path::new(r"\\?\UNC\nas\share\a.mp4")),
+            PathBuf::from(r"\\nas\share\a.mp4")
+        );
+        assert_eq!(
+            plain_path(Path::new(r"C:\Clips\a.mp4")),
+            PathBuf::from(r"C:\Clips\a.mp4")
+        );
+        assert_eq!(
+            ffmpeg_path(Path::new(r"\\?\C:\Clips\seg-000001.ts")),
+            "C:/Clips/seg-000001.ts"
+        );
     }
 
     #[test]
@@ -1660,7 +1807,11 @@ mod tests {
         let dir = env::temp_dir().join(format!("stillclip-names-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let first = clip_path(&dir, "Clip");
-        assert!(first.file_name().unwrap().to_string_lossy().starts_with("Clip 20"));
+        assert!(first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("Clip 20"));
         fs::write(&first, b"x").unwrap();
         let second = clip_path(&dir, "Clip");
         assert_ne!(first, second);
@@ -1672,7 +1823,8 @@ mod tests {
     #[ignore = "requires local FFmpeg; uses generated test video, never screen capture"]
     fn synthetic_video_can_be_trimmed_to_playable_mp4() {
         let ffmpeg = find_ffmpeg().expect("local FFmpeg is required");
-        let directory = env::temp_dir().join(format!("stillclip-recorder-test-{}", std::process::id()));
+        let directory =
+            env::temp_dir().join(format!("stillclip-recorder-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).unwrap();
         let source = directory.join("source.mp4");
@@ -1710,7 +1862,10 @@ mod tests {
         let info = probe_media(&ffmpeg, &source).unwrap();
         assert_eq!((info.width, info.height), (320, 180));
         assert!(info.audio);
-        for (mode, name) in [(TrimMode::Precise, "precise.mp4"), (TrimMode::Fast, "fast.mp4")] {
+        for (mode, name) in [
+            (TrimMode::Precise, "precise.mp4"),
+            (TrimMode::Fast, "fast.mp4"),
+        ] {
             let trimmed = directory.join(name);
             // The cut reports where it really starts, so marked moments can move with it.
             let from = trim_clip(&ffmpeg, &source, &trimmed, 1.4, 3.0, mode).unwrap();
@@ -1718,21 +1873,36 @@ mod tests {
                 TrimMode::Precise => assert_eq!(from, 1.4),
                 // Keyframes sit one second apart here, and the copied audio
                 // begins a little before that keyframe.
-                TrimMode::Fast => assert!((0.7..=1.01).contains(&from), "fast cut starts at {from}"),
+                TrimMode::Fast => {
+                    assert!((0.7..=1.01).contains(&from), "fast cut starts at {from}")
+                }
             }
             let duration = probe_duration(&ffmpeg, &trimmed).unwrap();
-            assert!((1.5..=2.4).contains(&duration), "wrong duration: {duration}");
+            assert!(
+                (1.5..=2.4).contains(&duration),
+                "wrong duration: {duration}"
+            );
             // Marked moments of the source move into the new clip; the one
             // before the cut is left behind.
             let moved = crate::marker_offsets(&[0.5, 1.5, 2.9], from, 3.0 - from);
             let expected: Vec<f64> = [1.5 - from, 2.9 - from].into_iter().collect();
             assert_eq!(moved.len(), expected.len(), "{moved:?} for a cut at {from}");
             for (got, want) in moved.iter().zip(&expected) {
-                assert!((got - want).abs() < 0.001, "{moved:?} instead of {expected:?}");
+                assert!(
+                    (got - want).abs() < 0.001,
+                    "{moved:?} instead of {expected:?}"
+                );
             }
-            assert!(trim_clip(&ffmpeg, &source, &trimmed, 0.0, 1.0, mode).is_err(), "must not overwrite");
+            assert!(
+                trim_clip(&ffmpeg, &source, &trimmed, 0.0, 1.0, mode).is_err(),
+                "must not overwrite"
+            );
         }
-        assert_eq!(fs::read(&source).unwrap(), original_bytes, "original must stay intact");
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            original_bytes,
+            "original must stay intact"
+        );
         let thumbnail = directory.join("thumbs").join("source.jpg");
         make_thumbnail(&ffmpeg, &source, &thumbnail, 1.0).unwrap();
         assert!(fs::metadata(&thumbnail).unwrap().len() > 500);
@@ -1748,7 +1918,10 @@ mod tests {
             eprintln!("STILLCLIP_SYNC_OUT not set; skipping");
             return;
         };
-        let seconds: u64 = env::var("STILLCLIP_SYNC_SECONDS").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
+        let seconds: u64 = env::var("STILLCLIP_SYNC_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(12);
         let ffmpeg = find_ffmpeg().expect("local FFmpeg is required");
         let dir = PathBuf::from(out);
         fs::create_dir_all(&dir).unwrap();
@@ -1766,7 +1939,10 @@ mod tests {
         let info = recorder
             .start(SessionConfig {
                 display,
-                encoder: capture::select_encoder(crate::settings::EncoderChoice::Auto, &capabilities.encoders),
+                encoder: capture::select_encoder(
+                    crate::settings::EncoderChoice::Auto,
+                    &capabilities.encoders,
+                ),
                 capabilities,
                 fps: 60,
                 quality: Quality::P720,
@@ -1799,15 +1975,22 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let displays = capture::displays();
-        let display = capture::choose_display(&displays, "").expect("a display").clone();
+        let display = capture::choose_display(&displays, "")
+            .expect("a display")
+            .clone();
         let capabilities = capture::probe_capabilities(&ffmpeg, &dir);
-        eprintln!("display {display:?}
-capabilities {capabilities:?}");
+        eprintln!(
+            "display {display:?}
+capabilities {capabilities:?}"
+        );
         let mut recorder = Recorder::new(ffmpeg.clone());
         let info = recorder
             .start(SessionConfig {
                 display,
-                encoder: capture::select_encoder(crate::settings::EncoderChoice::Auto, &capabilities.encoders),
+                encoder: capture::select_encoder(
+                    crate::settings::EncoderChoice::Auto,
+                    &capabilities.encoders,
+                ),
                 capabilities,
                 fps: 60,
                 quality: Quality::P720,
@@ -1832,21 +2015,41 @@ capabilities {capabilities:?}");
         let clip = recorder.save_replay(4, "Testspiel: Runde?").unwrap();
         let clip_info = probe_media(&ffmpeg, &clip.path).unwrap();
         eprintln!("clip {clip:?} {clip_info:?}");
-        assert!(clip.path.file_name().unwrap().to_string_lossy().starts_with("Testspiel Runde 20"));
+        assert!(clip
+            .path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("Testspiel Runde 20"));
         assert!(clip_info.audio, "replay must carry system audio");
-        assert!((3.9..=4.15).contains(&clip_info.duration), "precise replay length {}", clip_info.duration);
+        assert!(
+            (3.9..=4.15).contains(&clip_info.duration),
+            "precise replay length {}",
+            clip_info.duration
+        );
         assert_eq!((clip_info.width, clip_info.height), (1280, 720));
         thread::sleep(Duration::from_secs(2));
         let full = recorder.stop().unwrap().expect("full session video");
         let full_info = probe_media(&ffmpeg, &full).unwrap();
         eprintln!("full {full:?} {full_info:?}");
         assert!(full_info.audio);
-        assert!((8.0..=14.0).contains(&full_info.duration), "full length {}", full_info.duration);
+        assert!(
+            (8.0..=14.0).contains(&full_info.duration),
+            "full length {}",
+            full_info.duration
+        );
         assert!(!buffer_dir(&dir).exists(), "buffer must be cleaned up");
         // Audio and video should end together: no drift after ten seconds.
         let ffprobe = ffprobe_for(&ffmpeg).expect("ffprobe");
         let output = command(&ffprobe)
-            .args(["-v", "error", "-show_entries", "stream=codec_type,duration", "-of", "csv=p=0"])
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,duration",
+                "-of",
+                "csv=p=0",
+            ])
             .arg(&full)
             .output()
             .unwrap();
@@ -1861,7 +2064,10 @@ capabilities {capabilities:?}");
             }
         }
         assert_eq!(durations.len(), 2, "{text}");
-        assert!((durations[0] - durations[1]).abs() < 0.25, "audio/video drift: {durations:?}");
+        assert!(
+            (durations[0] - durations[1]).abs() < 0.25,
+            "audio/video drift: {durations:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1937,7 +2143,11 @@ capabilities {capabilities:?}");
         let full = dir.join("full.mp4");
         recorder.export_all(&segments, &full).unwrap();
         let full_info = probe_media(&ffmpeg, &full).unwrap();
-        assert!((full_info.duration - 12.5).abs() < 0.3, "{}", full_info.duration);
+        assert!(
+            (full_info.duration - 12.5).abs() < 0.3,
+            "{}",
+            full_info.duration
+        );
 
         // A marked moment at 7.0 s with four seconds before and two after:
         // the window has to land in the middle of the recording, not at its end.
@@ -1951,6 +2161,34 @@ capabilities {capabilities:?}");
             (6.0..=6.6).contains(&marked_info.duration),
             "the marked window should be about six seconds, got {}",
             marked_info.duration
+        );
+        // The ring can disappear while an export is queued. Pinned segments
+        // must still produce a complete video, including the precise path.
+        let snapshot = crate::export::Snapshot::new(&dir, &chosen).unwrap();
+        for segment in &segments {
+            fs::remove_file(&segment.path).unwrap();
+        }
+        let detached = dir.join("detached.mp4");
+        crate::export::ReplayExport {
+            snapshot,
+            output: detached.clone(),
+            ffmpeg: ffmpeg.clone(),
+            ffprobe,
+            span: None,
+            seconds: 6.0,
+            gop: 0.4,
+            precise: true,
+            encoder: Encoder::Cpu,
+            rates: crate::encoding::CaptureEncoding::for_output(320, 180, 30, 320, 180, 2),
+        }
+        .run()
+        .unwrap();
+        let detached_info = probe_media(&ffmpeg, &detached).unwrap();
+        assert!(detached_info.audio);
+        assert!(
+            (detached_info.duration - 6.0).abs() < 0.15,
+            "{}",
+            detached_info.duration
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2007,7 +2245,11 @@ capabilities {capabilities:?}");
         assert!(from < 1.0 && to > 15.0, "{from} {to}");
         let clip = recorder.save_marker(12.0, 6.0, 4.0, "Markierung").unwrap();
         // The clip starts at the keyframe at or shortly before the wanted spot.
-        assert!((5.6..=6.05).contains(&clip.start), "clip starts at {}", clip.start);
+        assert!(
+            (5.6..=6.05).contains(&clip.start),
+            "clip starts at {}",
+            clip.start
+        );
         let info = probe_media(&ffmpeg, &clip.path).unwrap();
         eprintln!("clip {clip:?} {info:?}");
         assert!(info.audio, "a marked moment keeps the sound");
