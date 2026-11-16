@@ -288,7 +288,7 @@ select:focus { border-color: #969696; }
 .trim-duration { font-size: 12px; color: #969696; }
 .trim-controls { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
 .trim-controls label { width: 120px; flex-shrink: 1; min-width: 90px; }
-.trim-controls label:nth-child(3) { width: 220px; }
+.trim-controls label:nth-child(3) { width: 250px; }
 .trim-controls select { width: 100%; height: 38px; }
 .trim-controls .btn { margin-left: auto; min-height: 38px; }
 .trim-help { font-size: 12px; color: #969696; margin: 12px 0 0; min-height: 15px; }

@@ -1362,7 +1362,7 @@ pub fn clip_path(directory: &Path, prefix: &str) -> PathBuf {
     candidate
 }
 
-fn diagnostic(bytes: &[u8]) -> String {
+pub(crate) fn diagnostic(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     let lines: Vec<_> = text
         .lines()

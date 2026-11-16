@@ -86,6 +86,12 @@ Puffer wiederherzustellen oder zu löschen.
   Abspielposition, Bildschritte, Schleife der Auswahl, Tastatur (Leertaste,
   I/O, Pfeiltasten, L, M, Entf). Export präzise (neu kodiert) oder schnell
   (ohne Neukodierung).
+- **Discord-Export.** Im Editor unter **Export** zwischen **Discord ohne Nitro
+  · 20 MB** und **Discord Nitro · 1 GB** wählen. Stillclip passt Bitrate,
+  Auflösung und Bildrate an die Länge des ausgewählten Bereichs an (bis
+  1080p/60 FPS, ohne Hochskalieren). Eine neue MP4 mit H.264 und AAC landet
+  in der Bibliothek; Original und Markierungen bleiben erhalten. Hochgeladen
+  wird nichts automatisch.
 - **Ganze Sitzung behalten.** Optional wird beim Beenden zusätzlich die
   komplette Aufnahme als Video gespeichert. Nach einem Absturz werden
   übrig gebliebene Segmente einer solchen Sitzung beim nächsten Start
@@ -118,6 +124,32 @@ Clips liegen standardmäßig im Ordner `clips` neben der EXE, Einstellungen,
 Vorschaubilder und der Medienindex unter `settings`. Während einer Aufnahme
 liegt der Segmentpuffer im versteckten Unterordner `clips/.stillclip-puffer`
 und wird danach entfernt.
+
+### Für Discord speichern
+
+Clip öffnen, den gewünschten Bereich wählen und unter **Export** das passende
+Discord-Profil auswählen. **Für Discord speichern** erstellt eine eigene Datei
+mit dem Zusatz `- Discord` beziehungsweise `- Discord Nitro`. Diese lässt sich
+anschließend aus dem Clip-Ordner in Discord ziehen.
+
+Die Grenzen von 20 MB ohne Nitro und 1 GB mit Nitro entsprechen der
+[Discord-Hilfe zu Dateianhängen](https://support.discord.com/hc/de/articles/25444343291031-Dateianh%C3%A4nge-FAQ)
+(geprüft am 16. November 2026). Nitro Basic ist ein anderer Tarif und verwendet
+nicht das 1-GB-Profil.
+
+Für die Dateigröße kodiert Stillclip in zwei Durchläufen mit x264 auf der CPU,
+reserviert Platz für Ton und MP4-Daten und prüft die fertige Datei. Nur ein
+vollständiger Export unter dem gewählten Limit wird gespeichert. Bei Bedarf
+folgt ein weiterer Versuch mit niedrigerer Bitrate. Ist der Ausschnitt zu lang,
+fordert Stillclip einen kürzeren Bereich oder ein größeres Profil an; das Video
+wird nie am Dateilimit abgeschnitten. Kurze Clips müssen das Limit nicht
+ausschöpfen. Die Aufnahme kann währenddessen weiterlaufen, die zusätzliche
+CPU-Last kann sich jedoch auf die Spielleistung auswirken.
+
+Die erste Tonspur enthält bei Stillclip-Aufnahmen bereits Spiel und Mikrofon.
+Der Discord-Export übernimmt diese als eine Stereospur; eine zusätzliche
+Mikrofonspur wird nicht doppelt eingemischt. Bei importierten Videos wird
+ebenfalls die erste Tonspur verwendet.
 
 ## Einstellungen
 
@@ -218,6 +250,7 @@ Symbol im Infobereich.
 | `src/main.rs` | Fenster, WebView, Ereignisschleife, IPC-Aktionen, Hintergrundjobs |
 | `src/lifecycle.rs` | Getestete Start-/Stopp-Anforderungen während Aufnahmewechseln |
 | `src/export.rs` | Unabhängige Exporte mit gesicherten Segmenten und geschützter Veröffentlichung |
+| `src/discord.rs` | Discord-Dateilimits, Bitratenplanung, zweistufiger MP4-Export und Größenprüfung |
 | `src/games.rs` | Spieleliste, Fenster-/Prozess-Erkennung, Watcher-Thread |
 | `src/capture.rs` | Bildschirme (DXGI), Encoder-Erkennung, FFmpeg-Kommandozeile |
 | `src/audio.rs` | WASAPI-Aufnahme (Loopback/Mikrofon) in Named Pipes, Gerätewechsel |

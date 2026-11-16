@@ -860,10 +860,13 @@
     const invalid = hasValues && !valid;
     $('trim-help').classList.toggle('error', invalid);
     const mode = $('trim-mode').value;
+    const discordLimit = mode === 'discord_free' ? '20 MB' : mode === 'discord_nitro' ? '1 GB' : null;
+    $('trim-label').textContent = discordLimit ? 'Für Discord speichern' : 'Als neuen Clip speichern';
     $('trim-help').textContent = invalid
       ? (duration && end > duration + state.editor_tolerance ? 'Das Ende muss innerhalb der Videolänge liegen.' : duration && duration < state.editor_min_seconds ? 'Dieses kurze Video wird vollständig übernommen.' : 'Der Ausschnitt muss mindestens zwei Sekunden lang sein.')
       : !state.ffmpeg_available ? 'Wähle FFmpeg in den Einstellungen aus, um Clips zuzuschneiden.'
-        : mode === 'fast' ? 'Schnell: ohne Neukodierung, der Schnitt beginnt am vorherigen Keyframe (bis zu einer Sekunde früher). Das Original bleibt erhalten.'
+        : discordLimit ? `MP4 unter ${discordLimit}. Die Qualität passt sich der Cliplänge an; die fertige Dateigröße wird geprüft. Das Komprimieren kann etwas dauern. Das Original bleibt erhalten.`
+          : mode === 'fast' ? 'Schnell: ohne Neukodierung, der Schnitt beginnt am vorherigen Keyframe (bis zu einer Sekunde früher). Das Original bleibt erhalten.'
           : 'Präzise: bildgenau, dauert je nach Länge ein paar Sekunden. Das Original bleibt erhalten.';
   }
 
